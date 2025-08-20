@@ -50,7 +50,7 @@ with col2:
 
 if st.button("تحليل"):
     with st.spinner("جاري جلب البيانات..."):
-        # جلب البيانات مع تأخير صغير لتجنب Rate Limit
+        # جلب البيانات مع تأخير صغير
         time.sleep(1)
         candles = fetch_candles(symbol, interval)
         if isinstance(candles, dict) and "error" in candles:
@@ -73,8 +73,12 @@ if st.button("تحليل"):
         bybit_interval = to_bybit_interval(interval)
         oi = fetch_oi(symbol, bybit_interval)
         if isinstance(oi, dict) and "error" in oi:
-            st.error(oi["error"])
-            st.stop()
+            if "test_data" in oi:
+                st.warning(oi["error"])
+                oi = {"result": {"list": oi["test_data"]}}
+            else:
+                st.error(oi["error"])
+                st.stop()
 
         # إجراء التحليل
         signal = analyze(candles, oi["result"]["list"], ratios)
