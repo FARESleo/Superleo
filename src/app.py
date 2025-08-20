@@ -1,4 +1,4 @@
-            import streamlit as st
+import streamlit as st
 from api_binance import get_candles, get_long_short_ratio
 from api_bybit import get_open_interest
 from analyzer import analyze
