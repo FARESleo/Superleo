@@ -1,16 +1,14 @@
 import requests
+from requests.exceptions import RequestException
 
 BASE_URL = "https://api.bybit.com"
 
-def get_open_interest(symbol="BTCUSDT", interval="15min", limit=50):
-    url = f"{BASE_URL}/derivatives/v3/public/open-interest?category=linear&symbol={symbol}&interval={interval}&limit={limit}"
-    res = requests.get(url)
-    
-    # تحقق من حالة الرد قبل فك الترميز
-    if res.status_code == 200:
+def get_open_interest(symbol="BTCUSDT", interval="15", limit=50):
+    """جلب بيانات Open Interest من Bybit."""
+    try:
+        url = f"{BASE_URL}/derivatives/v3/public/open-interest?category=linear&symbol={symbol}&interval={interval}&limit={limit}"
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
         return res.json()
-    else:
-        # إذا كان الرد غير ناجح، أعد قاموسًا فارغًا أو رسالة خطأ
-        # هذا يمنع التطبيق من الانهيار
-        print(f"Error fetching data from Bybit API: Status Code {res.status_code}, Response: {res.text}")
-        return {"result": {"list": []}}
+    except RequestException as e:
+        return {"error": f"Failed to fetch open interest: {str(e)}"}
