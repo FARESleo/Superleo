@@ -51,7 +51,7 @@ with col2:
 if st.button("تحليل"):
     with st.spinner("جاري جلب البيانات..."):
         # جلب البيانات مع تأخير صغير لتجنب Rate Limit
-        time.sleep(1)  # تأخير 1 ثانية بين الطلبات
+        time.sleep(1)
         candles = fetch_candles(symbol, interval)
         if isinstance(candles, dict) and "error" in candles:
             if "test_data" in candles:
