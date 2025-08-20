@@ -5,6 +5,7 @@ from analyzer import analyze
 from visualizer import plot_candles
 import plotly.graph_objects as go
 import pandas as pd
+import time
 
 st.set_page_config(page_title="Crypto Market Tool", layout="wide")
 
@@ -13,20 +14,20 @@ def to_bybit_interval(interval):
     """تحويل interval إلى تنسيق Bybit (رقم دقائق فقط)."""
     try:
         if interval.endswith('m'):
-            return interval.rstrip('m')  # مثال: "15m" -> "15"
+            return interval.rstrip('m')
         elif interval.endswith('h'):
             num = int(interval.rstrip('h'))
-            return str(num * 60)  # مثال: "1h" -> "60"، "4h" -> "240"
+            return str(num * 60)
         elif interval.endswith('d'):
             num = int(interval.rstrip('d'))
-            return str(num * 1440)  # مثال: "1d" -> "1440"
+            return str(num * 1440)
         else:
             return interval
     except ValueError:
-        return "15"  # قيمة افتراضية
+        return "15"
 
 # وظائف باستخدام التخزين المؤقت
-@st.cache_data(ttl=300)  # تخزين لمدة 5 دقائق
+@st.cache_data(ttl=300)
 def fetch_candles(symbol, interval):
     return get_candles(symbol, interval)
 
@@ -43,27 +44,31 @@ st.title("📊 Crypto Market Tool")
 # إدخال المستخدم
 col1, col2 = st.columns(2)
 with col1:
-    symbol = st.text_input("أدخل رمز العملة (مثال: BTCUSDT)", "BTCUSDT").upper()  # تحويل إلى أحرف كبيرة
+    symbol = st.text_input("أدخل رمز العملة (مثال: BTCUSDT)", "BTCUSDT").upper()
 with col2:
     interval = st.selectbox("اختر الفاصل الزمني", ["5m", "15m", "30m", "1h", "4h"], index=1)
 
 if st.button("تحليل"):
     with st.spinner("جاري جلب البيانات..."):
-        # جلب البيانات
+        # جلب البيانات مع تأخير صغير لتجنب Rate Limit
+        time.sleep(1)  # تأخير 1 ثانية بين الطلبات
         candles = fetch_candles(symbol, interval)
         if isinstance(candles, dict) and "error" in candles:
-            # تجربة فاصل زمني بديل إذا فشل الطلب
-            if "15m" in candles["error"] and interval != "1h":
-                st.warning("فشل جلب البيانات بـ 15m، جربنا 1h بدلاً من ذلك.")
-                candles = fetch_candles(symbol, "1h")
-            if isinstance(candles, dict) and "error" in candles:
+            if "test_data" in candles:
+                st.warning(candles["error"])
+                candles = candles["test_data"]
+            else:
                 st.error(candles["error"])
                 st.stop()
 
         ratios = fetch_ratios(symbol, interval)
         if isinstance(ratios, dict) and "error" in ratios:
-            st.error(ratios["error"])
-            st.stop()
+            if "test_data" in ratios:
+                st.warning(ratios["error"])
+                ratios = ratios["test_data"]
+            else:
+                st.error(ratios["error"])
+                st.stop()
 
         bybit_interval = to_bybit_interval(interval)
         oi = fetch_oi(symbol, bybit_interval)
@@ -74,11 +79,9 @@ if st.button("تحليل"):
         # إجراء التحليل
         signal = analyze(candles, oi["result"]["list"], ratios)
 
-        # التحقق من أخطاء التحليل
         if "status" in signal and signal["status"] == "error":
             st.error(signal["message"])
         else:
-            # عرض النتائج
             st.subheader("🔍 نتيجة التحليل")
             st.write(f"**الإشارة**: {signal['signal']}")
             st.write(f"**Open Interest**: {signal['oi']:.2f}")
@@ -86,7 +89,6 @@ if st.button("تحليل"):
             st.write(f"**Long/Short Ratio**: {signal['ratio']:.2f}")
             st.write(f"**تغير السعر**: {signal['price_change']:.2f}%")
 
-            # عرض الرسم البياني للشموع
             st.subheader("📈 الرسم البياني")
             candle_fig = plot_candles(candles)
             if isinstance(candle_fig, dict) and "error" in candle_fig:
@@ -94,7 +96,6 @@ if st.button("تحليل"):
             else:
                 st.plotly_chart(candle_fig, use_container_width=True)
 
-            # رسم بياني لـ Open Interest
             st.subheader("📊 Open Interest")
             df_oi = pd.DataFrame(oi["result"]["list"])
             df_oi["timestamp"] = pd.to_datetime(df_oi["timestamp"], unit="ms")
