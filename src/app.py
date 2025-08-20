@@ -1,4 +1,4 @@
-import streamlit as st
+            import streamlit as st
 from api_binance import get_candles, get_long_short_ratio
 from api_bybit import get_open_interest
 from analyzer import analyze
@@ -43,7 +43,7 @@ st.title("📊 Crypto Market Tool")
 # إدخال المستخدم
 col1, col2 = st.columns(2)
 with col1:
-    symbol = st.text_input("أدخل رمز العملة (مثال: BTCUSDT)", "BTCUSDT")
+    symbol = st.text_input("أدخل رمز العملة (مثال: BTCUSDT)", "BTCUSDT").upper()  # تحويل إلى أحرف كبيرة
 with col2:
     interval = st.selectbox("اختر الفاصل الزمني", ["5m", "15m", "30m", "1h", "4h"], index=1)
 
@@ -51,50 +51,58 @@ if st.button("تحليل"):
     with st.spinner("جاري جلب البيانات..."):
         # جلب البيانات
         candles = fetch_candles(symbol, interval)
-        ratios = fetch_ratios(symbol, interval)
-        bybit_interval = to_bybit_interval(interval)  # تحويل لـ Bybit
-        oi = fetch_oi(symbol, bybit_interval)
-
-        # التحقق من وجود أخطاء
         if isinstance(candles, dict) and "error" in candles:
-            st.error(candles["error"])
-        elif isinstance(ratios, dict) and "error" in ratios:
+            # تجربة فاصل زمني بديل إذا فشل الطلب
+            if "15m" in candles["error"] and interval != "1h":
+                st.warning("فشل جلب البيانات بـ 15m، جربنا 1h بدلاً من ذلك.")
+                candles = fetch_candles(symbol, "1h")
+            if isinstance(candles, dict) and "error" in candles:
+                st.error(candles["error"])
+                st.stop()
+
+        ratios = fetch_ratios(symbol, interval)
+        if isinstance(ratios, dict) and "error" in ratios:
             st.error(ratios["error"])
-        elif isinstance(oi, dict) and "error" in oi:
+            st.stop()
+
+        bybit_interval = to_bybit_interval(interval)
+        oi = fetch_oi(symbol, bybit_interval)
+        if isinstance(oi, dict) and "error" in oi:
             st.error(oi["error"])
+            st.stop()
+
+        # إجراء التحليل
+        signal = analyze(candles, oi["result"]["list"], ratios)
+
+        # التحقق من أخطاء التحليل
+        if "status" in signal and signal["status"] == "error":
+            st.error(signal["message"])
         else:
-            # إجراء التحليل
-            signal = analyze(candles, oi["result"]["list"], ratios)
+            # عرض النتائج
+            st.subheader("🔍 نتيجة التحليل")
+            st.write(f"**الإشارة**: {signal['signal']}")
+            st.write(f"**Open Interest**: {signal['oi']:.2f}")
+            st.write(f"**متوسط OI**: {signal['avg_oi']:.2f}")
+            st.write(f"**Long/Short Ratio**: {signal['ratio']:.2f}")
+            st.write(f"**تغير السعر**: {signal['price_change']:.2f}%")
 
-            # التحقق من أخطاء التحليل
-            if "status" in signal and signal["status"] == "error":
-                st.error(signal["message"])
+            # عرض الرسم البياني للشموع
+            st.subheader("📈 الرسم البياني")
+            candle_fig = plot_candles(candles)
+            if isinstance(candle_fig, dict) and "error" in candle_fig:
+                st.error(candle_fig["error"])
             else:
-                # عرض النتائج
-                st.subheader("🔍 نتيجة التحليل")
-                st.write(f"**الإشارة**: {signal['signal']}")
-                st.write(f"**Open Interest**: {signal['oi']:.2f}")
-                st.write(f"**متوسط OI**: {signal['avg_oi']:.2f}")
-                st.write(f"**Long/Short Ratio**: {signal['ratio']:.2f}")
-                st.write(f"**تغير السعر**: {signal['price_change']:.2f}%")
+                st.plotly_chart(candle_fig, use_container_width=True)
 
-                # عرض الرسم البياني للشموع
-                st.subheader("📈 الرسم البياني")
-                candle_fig = plot_candles(candles)
-                if isinstance(candle_fig, dict) and "error" in candle_fig:
-                    st.error(candle_fig["error"])
-                else:
-                    st.plotly_chart(candle_fig, use_container_width=True)
-
-                # رسم بياني لـ Open Interest
-                st.subheader("📊 Open Interest")
-                df_oi = pd.DataFrame(oi["result"]["list"])
-                df_oi["timestamp"] = pd.to_datetime(df_oi["timestamp"], unit="ms")
-                fig_oi = go.Figure(data=[go.Scatter(
-                    x=df_oi["timestamp"],
-                    y=df_oi["openInterest"].astype(float),
-                    mode="lines",
-                    name="Open Interest"
-                )])
-                fig_oi.update_layout(title="Open Interest Over Time")
-                st.plotly_chart(fig_oi, use_container_width=True)
+            # رسم بياني لـ Open Interest
+            st.subheader("📊 Open Interest")
+            df_oi = pd.DataFrame(oi["result"]["list"])
+            df_oi["timestamp"] = pd.to_datetime(df_oi["timestamp"], unit="ms")
+            fig_oi = go.Figure(data=[go.Scatter(
+                x=df_oi["timestamp"],
+                y=df_oi["openInterest"].astype(float),
+                mode="lines",
+                name="Open Interest"
+            )])
+            fig_oi.update_layout(title="Open Interest Over Time")
+            st.plotly_chart(fig_oi, use_container_width=True)
