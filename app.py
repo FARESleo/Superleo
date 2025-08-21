@@ -85,8 +85,7 @@ def okx_get_candles(instId, bar="15m", limit=200):
     url = "https://www.okx.com/api/v5/market/candles"
     if bar in ["1h", "2h", "4h", "6h", "12h", "1d"]:
         bar = bar + "utc"
-    current_time_ms = int(pd.Timestamp.now(tz=timezone.utc).timestamp() * 1000)
-    params = {"instId": instId, "bar": bar, "limit": limit, "after": current_time_ms}
+    params = {"instId": instId, "bar": bar, "limit": limit}
     r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
     r.raise_for_status()
     j = r.json()
@@ -112,7 +111,6 @@ def okx_get_open_interest(instId):
         return None
     return j.get("data", [])[0] if j.get("data") else None
 
-# دالة جديدة لجلب maxLever من OKX API (حقيقي)
 def okx_get_max_leverage(instId, instType="SWAP"):
     url = "https://www.okx.com/api/v5/public/instruments"
     params = {"instType": instType, "instId": instId}
@@ -124,11 +122,11 @@ def okx_get_max_leverage(instId, instType="SWAP"):
         return None
     data = j.get("data", [])[0] if j.get("data") else None
     if data:
-        max_lever = float(data.get("lever", 1))  # maxLever من الـ API
+        max_lever = float(data.get("lever", 1))
         return max_lever
     return None
 
-# ===================== OI Analysis ===================== (محسن لدقة أكبر)
+# ===================== OI Analysis =====================
 def analyze_oi(df, oi, threshold=5_000_000):
     if df.empty or not oi:
         return {"msg": "❌ لا توجد بيانات كافية", "risk": "Unknown", "icon": "❌"}
@@ -138,7 +136,7 @@ def analyze_oi(df, oi, threshold=5_000_000):
     last_close = df["close"].iloc[-1]
     prev_close = df["close"].iloc[-5]
     chg = ((last_close - prev_close) / prev_close) * 100
-    avg_volume = df["volume"].mean()  # إضافة فحص لحجم التداول لدقة
+    avg_volume = df["volume"].mean()
     if chg > 1 and oi_usd > threshold and avg_volume > df["volume"].mean() * 1.2:
         return {"msg": "صعود قوي + OI مرتفع + حجم مرتفع → صاعد بقوة", "risk": "Bullish", "icon": "🚀"}
     if chg < -1 and oi_usd > threshold and avg_volume > df["volume"].mean() * 1.2:
@@ -147,15 +145,15 @@ def analyze_oi(df, oi, threshold=5_000_000):
         return {"msg": "سعر شبه ثابت + OI يرتفع بسرعة → تحرك وشيك", "risk": "High Risk", "icon": "⚖️"}
     return {"msg": "حركة طبيعية وهادئة", "risk": "Neutral", "icon": "✅"}
 
-# ===================== Trading Calculator ===================== (مع قيم حقيقية)
+# ===================== Trading Calculator =====================
 def trading_calculator(df, instId):
     if df.empty:
         st.error("❌ لا توجد بيانات لعرض الحاسبة. يرجى جلب البيانات أولاً.")
         return
 
-    max_lever = okx_get_max_leverage(instId) or 125.0  # افتراضي إذا فشل الجلب (مثل BTC-SWAP)
-    imr_default = 100 / max_lever  # IMR حقيقي من maxLever
-    mmr_default = imr_default / 2  # MMR تقريبي (نصف IMR)
+    max_lever = okx_get_max_leverage(instId) or 125.0
+    imr_default = 100 / max_lever
+    mmr_default = imr_default / 2
 
     st.subheader("📈 حاسبة التداول المتقدمة")
     with st.expander("افتح الحاسبة", expanded=True):
@@ -171,16 +169,14 @@ def trading_calculator(df, instId):
             target_price = st.number_input("سعر الهدف", min_value=0.01, value=float(df["close"].iloc[-1]) * 1.05, step=0.01)
             direction = st.selectbox("الاتجاه", ["📈 شراء (Long)", "📉 بيع (Short)"])
 
-        # حساب الرافعة المالية
         margin_diff = imr - mmr
         max_leverage = 100 / margin_diff if margin_diff > 0 else 1
         leverage_options = [5, 10, 20, 30, 50, 100]
         leverage_labels = [f"{x}x ({'منخفضة' if x <= 10 else 'متوسطة' if x <= 50 else 'عالية جداً'})" for x in leverage_options if x <= max_leverage]
         leverage_labels.append(f"{max_leverage:.2f}x (القصوى)")
-        leverage = st.selectbox("اختر الرافعة المالية", leverage_labels, index=0)
-        leverage = float(leverage.split("x")[0])
+        leverage_str = st.selectbox("اختر الرافعة المالية", leverage_labels, index=0)
+        leverage = float(leverage_str.split("x")[0])
 
-        # الحسابات
         if margin_diff <= 0 or any(v is None for v in [imr, mmr, capital, current_price, target_price]):
             st.error("⚠️ يرجى إدخال قيم صالحة لجميع الحقول.")
             return
@@ -195,7 +191,6 @@ def trading_calculator(df, instId):
         else:
             liquidation_price = current_price * (1 + (margin_diff / 100))
 
-        # عرض النتائج
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("فرق الهامش", f"{margin_diff:.2f}%")
@@ -206,7 +201,6 @@ def trading_calculator(df, instId):
         with col3:
             st.metric("سعر التصفية", f"{liquidation_price:.4f}")
 
-        # اقتراح الصفقة بناءً على التحليل
         oi = okx_get_open_interest(instId)
         analysis = analyze_oi(df, oi) if oi else {"risk": "Unknown"}
         st.subheader("📊 اقتراح الصفقة")
@@ -258,7 +252,6 @@ if analyze_button:
             instId = okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp)
             df = okx_get_candles(instId, bar=tf, limit=limit)
             st.session_state.df = df
-            st.write(f"Debug: DataFrame size = {len(df)} rows")  # تصحيح للتحقق من البيانات
             
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
@@ -288,11 +281,8 @@ if analyze_button:
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
 
-                # إضافة خيار الحاسبة
-                if st.button("📊 افتح حاسبة التداول"):
-                    st.session_state.show_calculator = True
-                    st.write("Debug: Calculator button clicked, show_calculator = True")  # تصحيح
-
+                # إضافة زر لتفعيل الحاسبة
+                st.session_state.show_calculator = True if st.button("📊 افتح حاسبة التداول") else False
         except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except Exception as e:
@@ -300,5 +290,4 @@ if analyze_button:
 
 # عرض الحاسبة إذا تم تفعيلها
 if st.session_state.show_calculator and not st.session_state.df.empty:
-    st.write("Debug: Rendering calculator...")  # تصحيح
     trading_calculator(st.session_state.df, okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp))
