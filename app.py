@@ -258,6 +258,7 @@ if analyze_button:
             instId = okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp)
             df = okx_get_candles(instId, bar=tf, limit=limit)
             st.session_state.df = df
+            st.write(f"Debug: DataFrame size = {len(df)} rows")  # تصحيح للتحقق من البيانات
             
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
@@ -290,7 +291,7 @@ if analyze_button:
                 # إضافة خيار الحاسبة
                 if st.button("📊 افتح حاسبة التداول"):
                     st.session_state.show_calculator = True
-                    st.experimental_rerun()  # إعادة تشغيل لضمان التحديث
+                    st.write("Debug: Calculator button clicked, show_calculator = True")  # تصحيح
 
         except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
@@ -299,4 +300,5 @@ if analyze_button:
 
 # عرض الحاسبة إذا تم تفعيلها
 if st.session_state.show_calculator and not st.session_state.df.empty:
+    st.write("Debug: Rendering calculator...")  # تصحيح
     trading_calculator(st.session_state.df, okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp))
