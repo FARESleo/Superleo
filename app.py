@@ -155,7 +155,7 @@ def trading_calculator(df, instId):
 
     max_lever = okx_get_max_leverage(instId) or 125.0  # افتراضي إذا فشل الجلب (مثل BTC-SWAP)
     imr_default = 100 / max_lever  # IMR حقيقي من maxLever
-    mmr_default = imr_default / 2  # MMR تقريبي (نصف IMR، كما في بعض البورصات)
+    mmr_default = imr_default / 2  # MMR تقريبي (نصف IMR)
 
     st.subheader("📈 حاسبة التداول المتقدمة")
     with st.expander("افتح الحاسبة", expanded=True):
@@ -292,7 +292,7 @@ if analyze_button:
                     st.session_state.show_calculator = True
                     st.experimental_rerun()  # إعادة تشغيل لضمان التحديث
 
-except requests.exceptions.HTTPError as e:
+        except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except Exception as e:
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
