@@ -36,11 +36,18 @@ def to_df_okx(candles):
 
 def plot_line_chart(df, title):
     fig = go.Figure()
+    
+    # إضافة الرسم البياني الخطي
     fig.add_trace(go.Scatter(x=df["ts"], y=df["close"], mode='lines', name='السعر', line=dict(color='cyan', width=2)))
+    
+    # حساب وإضافة المتوسط المتحرك (50 شمعة)
     df['SMA_50'] = df['close'].rolling(window=50).mean()
     fig.add_trace(go.Scatter(x=df["ts"], y=df['SMA_50'], mode='lines', name='SMA 50', line=dict(color='yellow', dash='dot')))
+
+    # حساب وإضافة المتوسط المتحرك (200 شمعة)
     df['SMA_200'] = df['close'].rolling(window=200).mean()
     fig.add_trace(go.Scatter(x=df["ts"], y=df['SMA_200'], mode='lines', name='SMA 200', line=dict(color='orange', dash='dot')))
+
     fig.update_layout(
         title=title, 
         xaxis_rangeslider_visible=False, 
@@ -55,29 +62,12 @@ def plot_line_chart(df, title):
     return fig
 
 # ===================== OKX API =====================
-def okx_get_instruments(instType="SPOT"):
-    url = "https://www.okx.com/api/v5/public/instruments"
-    params = {"instType": instType, "uly": "USDT" if instType == "SWAP" else None}
-    try:
-        r = requests.get(url, params={k: v for k, v in params.items() if v is not None}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        r.raise_for_status()
-        j = r.json()
-        if j.get("code") != "0":
-            st.error(f"خطأ من OKX API: {err_msg(j)}")
-            return []
-        instruments = [inst["instId"] for inst in j.get("data", []) if inst["quoteCcy"] == "USDT"]
-        if not instruments:
-            st.warning("⚠️ لا توجد أدوات متاحة لـ USDT في هذا النوع.")
-        return sorted(instruments)
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ خطأ في الاتصال بـ OKX API: {str(e)}")
-        return []
-    except Exception as e:
-        st.error(f"❌ خطأ غير متوقع في جلب قائمة الأدوات: {str(e)}")
-        return []
-
 def okx_inst_id(symbol_text, use_perp=True):
-    return symbol_text
+    s = symbol_text.upper().replace("-", "")
+    if not s.endswith("USDT"):
+        s = f"{s}USDT"
+    base = s[:-4]
+    return f"{base}-USDT-SWAP" if use_perp else f"{base}-USDT"
 
 @st.cache_data(ttl=60)
 def okx_get_candles(instId, bar="15m", limit=200):
@@ -114,18 +104,25 @@ def okx_get_open_interest(instId):
 def analyze_oi(df, oi, threshold=5_000_000):
     if df.empty or not oi:
         return {"msg": "❌ لا توجد بيانات كافية", "risk": "Unknown", "icon": "❌"}
+
     oi_usd = float(oi.get("oiUsd", 0))
     if len(df) < 5:
         return {"msg": "❌ بيانات غير كافية للتحليل", "risk": "Unknown", "icon": "❌"}
+
     last_close = df["close"].iloc[-1]
     prev_close = df["close"].iloc[-5]
+    
     chg = ((last_close - prev_close) / prev_close) * 100
+    
     if chg > 1 and oi_usd > threshold:
         return {"msg": "صعود قوي + OI مرتفع → صاعد بقوة", "risk": "Bullish", "icon": "🚀"}
+    
     if chg < -1 and oi_usd > threshold:
         return {"msg": "هبوط قوي + OI مرتفع → هابط بقوة", "risk": "Bearish", "icon": "🔻"}
+    
     if abs(chg) <= 1 and oi_usd > threshold:
         return {"msg": "سعر شبه ثابت + OI يرتفع بسرعة → تحرك وشيك", "risk": "High Risk", "icon": "⚖️"}
+    
     return {"msg": "حركة طبيعية وهادئة", "risk": "Neutral", "icon": "✅"}
 
 # ===================== UI =====================
@@ -133,23 +130,19 @@ st.title("📊 أداة سوق العملات الرقمية — تحليل Open
 
 with st.sidebar:
     st.header("⚙️ خيارات التحليل")
-    use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
-    instruments = okx_get_instruments(instType="SWAP" if use_perp_okx else "SPOT")
-    if not instruments:
-        instruments = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]  # قائمة افتراضية للاختبار
-        st.warning("⚠️ فشل جلب قائمة الأدوات، يتم استخدام قائمة افتراضية.")
-    symbol_in = st.selectbox("اختر العملة:", instruments, index=0)
+    symbol_in = st.text_input("أدخل رمز العملة:", "BTC")
     tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
     limit = st.slider("عدد الشموع", 50, 500, 200, 10)
+    use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
     analyze_button = st.button("🚀 جلب وتحليل البيانات")
-
-# تخزين البيانات في حالة الجلسة
+    
+# تخزين البيانات في حالة الجلسة لتجنب إعادة التحميل
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
     st.session_state.symbol = ""
     st.session_state.use_perp = True
 
-# تحديث البيانات عند النقر على الزر
+# عند النقر على "جلب وتحليل البيانات"
 if analyze_button:
     st.session_state.symbol = symbol_in
     st.session_state.use_perp = use_perp_okx
@@ -157,19 +150,24 @@ if analyze_button:
         try:
             instId = okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp)
             df = okx_get_candles(instId, bar=tf, limit=limit)
+            
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
             else:
                 st.plotly_chart(plot_line_chart(df, f"OKX {instId} — {tf}"), use_container_width=True)
+
                 st.subheader("📊 ملخص البيانات")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("📈 آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
                 col2.metric("🔼 أعلى سعر", f"{df['high'].max():,.4f}")
                 col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
+                
                 st.subheader("📦 تحليل Open Interest (OKX)")
                 oi = okx_get_open_interest(instId)
+                
                 if oi:
                     res_instant = analyze_oi(df, oi)
+                    
                     if res_instant['risk'] == "Bullish":
                         st.success(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
                     elif res_instant['risk'] == "Bearish":
@@ -178,9 +176,11 @@ if analyze_button:
                         st.warning(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
                     else:
                         st.info(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
+                    
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
+
         except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except Exception as e:
