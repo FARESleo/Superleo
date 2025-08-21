@@ -90,6 +90,9 @@ def okx_get_open_interest(instId):
 
 # ===================== OI Analysis (محسنة) =====================
 def analyze_oi(close_price, prev_close_price, oi_usd, threshold=5_000_000):
+    if prev_close_price == 0:
+        return "Unknown"
+        
     chg = ((close_price - prev_close_price) / prev_close_price) * 100
     
     if chg > 1 and oi_usd > threshold:
@@ -123,12 +126,17 @@ def run_backtest(df):
         current_row = df.iloc[i]
         prev_close_price = df.iloc[i-5]["close"]
         
-        # تحليل الإشارة
-        oi_data = okx_get_open_interest(okx_inst_id(st.session_state.symbol, st.session_state.use_perp))
-        if not oi_data:
-            continue
-            
-        oi_usd = float(oi_data.get("oiUsd", 0))
+        # تحليل الإشارة - هنا نستخدم نفس منطق الدالة analyze_oi
+        # ولكن مع بيانات تاريخية بدلاً من بيانات حية
+        # ملاحظة: هذا الجزء يفترض أن لدينا بيانات OI تاريخية لكل شمعة، 
+        # وهي غير متوفرة من OKX API، لذا سيتم استخدام OI الأخير لكل صفقة
+        # لتحقيق الغرض من العرض، لكن يجب الانتباه لهذه النقطة في التطبيق الحقيقي
+        
+        # للحصول على نتائج دقيقة، يجب جلب بيانات OI لكل شمعة، 
+        # ولكن هذا غير ممكن مع الـ API المجانية.
+        # لذلك، سنستخدم قيمة تقريبية هنا
+        oi_usd = float(okx_get_open_interest(okx_inst_id(st.session_state.symbol, st.session_state.use_perp))["oiUsd"])
+        
         signal = analyze_oi(current_row["close"], prev_close_price, oi_usd)
         
         if signal == "Bullish" and position is None:
@@ -171,10 +179,6 @@ with st.sidebar:
     use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
     analyze_button = st.button("🚀 جلب وتحليل البيانات")
     
-    st.markdown("---")
-    st.subheader("🕵️‍♂️ تقييم الاستراتيجية")
-    backtest_button = st.button("📈 تشغيل التحليل التاريخي (Backtest)")
-    
 # تخزين البيانات في حالة الجلسة لتجنب إعادة التحميل
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
@@ -204,19 +208,45 @@ if analyze_button:
                 
                 st.subheader("📦 تحليل Open Interest (OKX)")
                 oi = okx_get_open_interest(instId)
+                
                 if oi:
+                    # التحليل اللحظي
                     res_instant = analyze_oi(df['close'].iloc[-1], df['close'].iloc[-5], float(oi.get("oiUsd", 0)))
                     
                     if res_instant == "Bullish":
-                        st.success(f"**🚀 صعود قوي + OI مرتفع → صاعد بقوة** - مستوى الخطورة: **Bullish**")
+                        st.success(f"**🚀 صعود قوي + OI مرتفع → صاعد بقوة**")
                     elif res_instant == "Bearish":
-                        st.error(f"**🔻 هبوط قوي + OI مرتفع → هابط بقوة** - مستوى الخطورة: **Bearish**")
-                    elif "Weak" in res_instant or res_instant == "High Risk":
-                        st.warning(f"**⚖️ تحرك وشيك: مراقبة حذرة. قد يكون صعوداً أو هبوطاً قوياً.** - مستوى الخطورة: **High Risk**")
+                        st.error(f"**🔻 هبوط قوي + OI مرتفع → هابط بقوة**")
+                    elif res_instant == "High Risk":
+                        st.warning(f"**⚖️ تحرك وشيك: مراقبة حذرة. قد يكون صعوداً أو هبوطاً قوياً.**")
                     else:
-                        st.info(f"**✅ حركة طبيعية وهادئة** - مستوى الخطورة: **Neutral**")
+                        st.info(f"**✅ حركة طبيعية وهادئة**")
                     
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
+
+                    # ---
+                    st.markdown("---")
+                    st.subheader("🕵️‍♂️ نتائج التحليل التاريخي (Backtest)")
+                    
+                    # تشغيل التحليل التاريخي مباشرةً هنا
+                    results = run_backtest(st.session_state.df)
+                    
+                    if results["total_pnl"] > 0:
+                        st.success(f"✅ **أداء ممتاز!** صافي الربح كان: {results['total_pnl']:.4f}")
+                    elif results["total_pnl"] < 0:
+                        st.error(f"❌ **أداء ضعيف!** صافي الخسارة كان: {abs(results['total_pnl']):.4f}")
+                    else:
+                        st.info("ℹ️ **أداء محايد!** لم تسجل صفقات أو كان صافي الربح 0.")
+                    
+                    st.markdown("---")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("عدد الصفقات الرابحة", f"{results['wins']}")
+                    col2.metric("عدد الصفقات الخاسرة", f"{results['losses']}")
+                    col3.metric("نسبة النجاح (Win Rate)", f"{results['win_rate']:.2f}%")
+                    
+                    st.markdown(f"**ملاحظة**: التحليل يعتمد على استراتيجية بسيطة (شراء عند Bullish وبيع عند Bearish).")
+                
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
 
@@ -224,30 +254,3 @@ if analyze_button:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except Exception as e:
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
-
-# عند النقر على "تشغيل التحليل التاريخي"
-if backtest_button:
-    if not st.session_state.df.empty:
-        with st.spinner('⏳ جارٍ تشغيل التحليل التاريخي...'):
-            results = run_backtest(st.session_state.df)
-            
-            st.subheader("📊 نتائج التحليل التاريخي (Backtest)")
-            
-            if results["total_pnl"] > 0:
-                st.success(f"✅ **أداء ممتاز!** صافي الربح كان: {results['total_pnl']:.4f}")
-            elif results["total_pnl"] < 0:
-                st.error(f"❌ **أداء ضعيف!** صافي الخسارة كان: {abs(results['total_pnl']):.4f}")
-            else:
-                st.info("ℹ️ **أداء محايد!** لم تسجل صفقات أو كان صافي الربح 0.")
-            
-            st.markdown("---")
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("عدد الصفقات الرابحة", f"{results['wins']}")
-            col2.metric("عدد الصفقات الخاسرة", f"{results['losses']}")
-            col3.metric("نسبة النجاح (Win Rate)", f"{results['win_rate']:.2f}%")
-            
-            st.markdown(f"**ملاحظة**: التحليل يعتمد على استراتيجية بسيطة (شراء عند Bullish وبيع عند Bearish).")
-    else:
-        st.warning("⚠️ يرجى جلب البيانات أولاً قبل تشغيل التحليل التاريخي.")
-
