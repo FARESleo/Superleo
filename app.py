@@ -28,7 +28,7 @@ def err_msg(resp_json):
 def to_df_okx(candles):
     cols = ["ts","open","high","low","close","volume","volCcy","volQuote","confirm"]
     df = pd.DataFrame(candles, columns=cols[:len(candles[0])])
-    df["ts"] = pd.to_datetime(df["ts"].astype(str).astype(np.int64), unit="ms")
+    df["ts"] = pd.to_datetime(df["ts"].astype(str).astype(int), unit="ms")
     for c in ["open","high","low","close","volume"]:
         df[c] = df[c].astype(float)
     return df.sort_values("ts").reset_index(drop=True)
@@ -87,13 +87,13 @@ def analyze_oi(oi, df, threshold=5_000_000):
     chg = ((last-prev)/prev)*100
 
     if chg > 1 and oi_usd > threshold:
-        return {"msg":"صعود قوي مدعوم بزيادة OI","color":"lime","icon":"🚀"}
+        return {"msg":"🚀 صعود قوي مدعوم بزيادة OI","color":"lime","icon":"🚀"}
     if chg > 1:
-        return {"msg":"صعود ضعيف مع OI منخفض","color":"yellow","icon":"🟡"}
+        return {"msg":"🟡 صعود ضعيف مع OI منخفض","color":"yellow","icon":"🟡"}
     if chg < -1 and oi_usd > threshold:
-        return {"msg":"هبوط قوي مدعوم بزيادة OI","color":"red","icon":"🔻"}
+        return {"msg":"🔻 هبوط قوي مدعوم بزيادة OI","color":"red","icon":"🔻"}
     if chg < -1:
-        return {"msg":"هبوط ضعيف مع OI منخفض","color":"orange","icon":"⚠️"}
+        return {"msg":"⚠️ هبوط ضعيف مع OI منخفض","color":"orange","icon":"⚠️"}
     if oi_usd > threshold:
         return {"msg":"⚖️ سعر شبه ثابت مع OI مرتفع → احتمال تجميع/تصريف","color":"cyan","icon":"⚖️"}
     return {"msg":"✅ حركة طبيعية وهادئة","color":"white","icon":"✅"}
@@ -140,7 +140,7 @@ if analyze_button:
                         padding: 20px;
                         border-radius: 10px;
                         margin: 15px 0;
-                        font-size: 1.2em;
+                        font-size: 1.3em;
                         color: {res['color']};
                     ">
                         <b style="font-size:1.5em;">{res['icon']} {res['msg']}</b>
