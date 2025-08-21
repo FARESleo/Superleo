@@ -4,108 +4,105 @@ import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="Crypto Market Tool", layout="wide")
-st.title("📊 Crypto Market Tool — Candles + Open Interest")
-
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+st.set_page_config(page_title="أداة سوق العملات الرقمية", layout="wide")
 
 # ===================== Helpers =====================
-def err_msg(resp_json):
-    return f"OKX error: code={resp_json.get('code')} msg={resp_json.get('msg')}"
-
-def to_df_okx(candles):
-    cols = ["ts","open","high","low","close","volume","volCcy","volQuote","confirm"]
-    df = pd.DataFrame(candles, columns=cols[:len(candles[0])])
-    df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
-    for c in ["open","high","low","close","volume"]:
-        df[c] = df[c].astype(float)
-    return df.sort_values("ts").reset_index(drop=True)
+# ... (الدوال المساعدة: err_msg, to_df_okx, plot_candles)
+# ...
 
 def plot_candles(df, title):
     fig = go.Figure(data=[go.Candlestick(
-        x=df["ts"], open=df["open"], high=df["high"], low=df["low"], close=df["close"]
+        x=df["ts"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+        increasing_line_color='green', decreasing_line_color='red'
     )])
-    fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=520)
+    fig.update_layout(
+        title=title, 
+        xaxis_rangeslider_visible=False, 
+        height=520,
+        title_font_size=24,
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
     return fig
 
 # ===================== OKX API =====================
-def okx_inst_id(symbol_text, use_perp=True):
-    s = symbol_text.upper().replace("-", "")
-    if not s.endswith("USDT"):
-        s = f"{s}USDT"
-    base = s[:-4]
-    return f"{base}-USDT-SWAP" if use_perp else f"{base}-USDT"
-
-def okx_get_candles(instId, bar="15m", limit=200):
-    url = "https://www.okx.com/api/v5/market/candles"
-    params = {"instId": instId, "bar": bar, "limit": limit}
-    r = requests.get(url, params=params, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    j = r.json()
-    if j.get("code") != "0":
-        raise RuntimeError(err_msg(j))
-    return to_df_okx(j.get("data", []))
-
-def okx_get_open_interest(instId):
-    url = "https://www.okx.com/api/v5/public/open-interest"
-    params = {"instId": instId}
-    r = requests.get(url, params=params, headers=HEADERS, timeout=15)
-    r.raise_for_status()
-    j = r.json()
-    if j.get("code") != "0":
-        return None
-    return j.get("data", [])[0] if j.get("data") else None
+# ... (الدوال الخاصة بواجهة OKX API)
+# ...
 
 # ===================== OI Analysis =====================
 def analyze_oi(oi, df):
-    if not oi or df.empty:
-        return "❌ لا توجد بيانات كافية."
+    if not oi or df.empty or len(df) < 5:
+        return "❌ لا توجد بيانات كافية للتحليل."
 
     try:
         oi_val = float(oi["oiUsd"])
-    except:
-        return "⚠️ لم أتمكن من قراءة OI."
+    except (ValueError, KeyError):
+        return "⚠️ لم أتمكن من قراءة OI بشكل صحيح."
 
-    # مقارنة السعر الحالي بالمتوسط
     last_close = df["close"].iloc[-1]
-    prev_close = df["close"].iloc[-5] if len(df) > 5 else df["close"].iloc[0]
-    price_change = (last_close - prev_close) / prev_close * 100
+    prev_close = df["close"].iloc[-5]
+    price_change = ((last_close - prev_close) / prev_close) * 100
 
-    # قاعدة مبسطة للتفسير
-    if price_change > 1 and oi_val > 0:
-        return f"📈 السعر ↑ {price_change:.2f}% مع OI كبير → دخول Long (انتبه لفخ شراء)."
-    elif price_change < -1 and oi_val > 0:
-        return f"📉 السعر ↓ {price_change:.2f}% مع OI كبير → دخول Short (انتبه لفخ بيع)."
+    if price_change > 1:
+        if oi_val > 5000000:
+            return "📈 ارتفاع السعر مع OI كبير يؤكد قوة الاتجاه الصعودي."
+        else:
+            return "⚠️ ارتفاع السعر مع OI منخفض. قد يكون حركة مؤقتة."
+    elif price_change < -1:
+        if oi_val > 5000000:
+            return "📉 انخفاض السعر مع OI كبير يؤكد قوة الاتجاه الهبوطي."
+        else:
+            return "⚠️ انخفاض السعر مع OI منخفض. قد يكون تصفية صفقات لا أكثر."
     elif abs(price_change) < 0.5:
-        return "⚖️ السعر شبه ثابت مع OI مستمر → احتمال تجميع/تصريف."
+        if oi_val > 5000000:
+             return "⚖️ السعر شبه ثابت مع OI كبير. يرجى مراقبة احتمال تجميع/تصريف."
+        else:
+            return "✅ حركة عادية بلا إشارات قوية."
     else:
-        return "✅ حركة طبيعية بلا إشارات قوية."
+        return "✅ حركة عادية بلا إشارات قوية."
 
 # ===================== UI =====================
-symbol_in = st.text_input("أدخل رمز العملة:", "xrp")
-tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
-limit = st.slider("عدد الشموع", 50, 500, 200, 10)
-use_perp_okx = st.checkbox("OKX Perp (SWAP)", value=True)
+st.title("📊 أداة سوق العملات الرقمية — الشموع + Open Interest")
 
-if st.button("جلب وتحليل"):
-    try:
-        instId = okx_inst_id(symbol_in, use_perp=use_perp_okx)
-        df = okx_get_candles(instId, bar=tf, limit=limit)
+with st.sidebar:
+    st.header("خيارات التحليل")
+    symbol_in = st.text_input("أدخل رمز العملة:", "xrp")
+    tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
+    limit = st.slider("عدد الشموع", 50, 500, 200, 10)
+    use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
+    analyze_button = st.button("جلب وتحليل 🔍")
 
-        if df.empty:
-            st.error("❌ لم تصل بيانات شموع.")
-        else:
-            st.plotly_chart(plot_candles(df, f"OKX {instId} — {tf}"), use_container_width=True)
-
-            # تحليل OI
-            oi = okx_get_open_interest(instId)
-            st.subheader("📦 Open Interest (OKX)")
-            if oi:
-                st.metric("OI بالدولار", f"{float(oi['oiUsd']):,.0f}")
-                st.caption(f"آخر تحديث: {oi['ts']}")
-                st.info(analyze_oi(oi, df))
+if analyze_button:
+    with st.spinner('جارٍ جلب البيانات...'):
+        try:
+            instId = okx_inst_id(symbol_in, use_perp=use_perp_okx)
+            df = okx_get_candles(instId, bar=tf, limit=limit)
+            
+            if df.empty:
+                st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
             else:
-                st.write("لا توجد بيانات OI متاحة.")
+                # عرض الرسم البياني
+                st.plotly_chart(plot_candles(df, f"OKX {instId} — {tf}"), use_container_width=True)
 
-    except Exception as e:
-        st.error(f"حدث خطأ: {e}")
+                # عرض النتائج في أقسام
+                st.subheader("📊 ملخص البيانات")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
+                col2.metric("أعلى سعر (أيام)", f"{df['high'].max():,.4f}")
+                col3.metric("أدنى سعر (أيام)", f"{df['low'].min():,.4f}")
+                
+                # قسم تحليل Open Interest
+                st.subheader("📦 Open Interest (OKX)")
+                oi = okx_get_open_interest(instId)
+                if oi:
+                    col_oi_val, col_oi_msg = st.columns([1, 2])
+                    col_oi_val.metric("قيمة OI بالدولار", f"{float(oi['oiUsd']):,.0f}")
+                    col_oi_msg.info(analyze_oi(oi, df))
+                    st.caption(f"آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
+                else:
+                    st.warning("لا توجد بيانات OI متاحة لهذه الأداة.")
+
+        except requests.exceptions.HTTPError as e:
+            st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
+        except Exception as e:
+            st.error(f"❌ حدث خطأ غير متوقع: {e}")
+
