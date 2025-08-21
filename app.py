@@ -360,4 +360,48 @@ if analyze_button or st.session_state.get('symbol_changed'):
     with st.spinner('⏳ جارٍ جلب البيانات...'):
         try:
             instId = okx_inst_id(st.session_state.selected_symbol, use_perp=use_perp_okx)
-            df = okx_get_candles(instId, bar=tf, limit=limit
+            df = okx_get_candles(instId, bar=tf, limit=limit)
+            st.session_state.df = df
+            st.session_state.inst_id = instId
+            
+            if df.empty:
+                st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
+            else:
+                st.plotly_chart(plot_line_chart(df, f"OKX {instId} — {tf}"), use_container_width=True)
+                st.subheader("📊 ملخص البيانات")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("📈 آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
+                col2.metric("🔼 أعلى سعر", f"{df['high'].max():,.4f}")
+                col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
+                
+                st.subheader("📦 تحليل Open Interest (OKX)")
+                oi = okx_get_open_interest(instId)
+                if oi:
+                    res_instant = analyze_oi(df, oi)
+                    if res_instant['risk'] == "Bullish":
+                        st.success(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
+                    elif res_instant['risk'] == "Bearish":
+                        st.error(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
+                    elif res_instant['risk'] == "High Risk":
+                        st.warning(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
+                    else:
+                        st.info(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
+                    st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
+                else:
+                    st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
+                
+                trading_calculator(df, instId)
+        except requests.exceptions.HTTPError as e:
+            st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
+        except RuntimeError as e:
+            st.error(f"❌ حدث خطأ: {e}")
+        except Exception as e:
+            st.error(f"❌ حدث خطأ غير متوقع: {e}")
+
+# Display calculator on initial load if data is present
+if 'df' in st.session_state and not st.session_state.df.empty:
+    trading_calculator(st.session_state.df, st.session_state.inst_id)
+    
+# Clean up symbol_changed after use
+if 'symbol_changed' in st.session_state:
+    del st.session_state.symbol_changed
