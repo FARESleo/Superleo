@@ -235,13 +235,11 @@ with st.sidebar:
     limit = st.slider("عدد الشموع", 50, 500, 200, 10)
     use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
     analyze_button = st.button("🚀 جلب وتحليل البيانات")
-    
-# تخزين البيانات في حالة الجلسة
+
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
     st.session_state.symbol = ""
     st.session_state.use_perp = True
-    st.session_state.show_calculator = False
 
 # عند النقر على "جلب وتحليل البيانات"
 if analyze_button:
@@ -257,7 +255,6 @@ if analyze_button:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
             else:
                 st.plotly_chart(plot_line_chart(df, f"OKX {instId} — {tf}"), use_container_width=True)
-
                 st.subheader("📊 ملخص البيانات")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("📈 آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
@@ -280,14 +277,13 @@ if analyze_button:
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
-
-                # إضافة زر لتفعيل الحاسبة
-                st.session_state.show_calculator = True if st.button("📊 افتح حاسبة التداول") else False
         except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except Exception as e:
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
 
-# عرض الحاسبة إذا تم تفعيلها
-if st.session_state.show_calculator and not st.session_state.df.empty:
-    trading_calculator(st.session_state.df, okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp))
+# عرض الحاسبة فقط عندما يكون هناك بيانات في الـ dataframe
+if not st.session_state.df.empty:
+    with st.container():
+        instId = okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp)
+        trading_calculator(st.session_state.df, instId)
