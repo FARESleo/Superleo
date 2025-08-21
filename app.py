@@ -84,6 +84,8 @@ def okx_get_candles(instId, bar="15m", limit=200):
     df = to_df_okx(j.get("data", []))
     if not df.empty:
         last_candle_time = df["ts"].iloc[-1]
+        # جعل last_candle_time tz-aware باستخدام نفس منطقة الزمن UTC
+        last_candle_time = last_candle_time.tz_localize(timezone.utc)
         current_time = pd.Timestamp.now(tz=timezone.utc)
         time_diff = (current_time - last_candle_time).total_seconds() / 60
         if time_diff > 15:
