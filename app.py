@@ -3,147 +3,154 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# ============ إعداد الصفحة ============
-st.set_page_config(page_title="📊 أداة تحليل سوق العملات الرقمية", layout="wide")
+st.set_page_config(page_title="📊 أداة سوق العملات الرقمية", layout="wide")
 
-# ============ CSS لتنسيق عصري ============
+# ===================== CSS (خلفية + تنسيق) =====================
 st.markdown("""
     <style>
     body {
-        background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+        background: url('https://images.unsplash.com/photo-1621504805083-d1b52d2c8a4d?auto=format&fit=crop&w=1600&q=80') no-repeat center center fixed;
+        background-size: cover;
         color: #EEE;
-        font-family: 'Cairo', sans-serif;
     }
     .main {
-        background: transparent;
-    }
-    h1, h2, h3 {
-        color: #00e6e6 !important;
-        font-weight: 700 !important;
-    }
-    .stMetric {
-        background: rgba(0,0,0,0.3);
-        padding: 15px;
+        background: rgba(0,0,0,0.75);
+        padding: 20px;
         border-radius: 15px;
-        text-align: center;
-        color: #fff;
-        box-shadow: 0px 0px 10px rgba(0,255,255,0.2);
-    }
-    .css-1d391kg {
-        background: transparent !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# ============ الدوال المساعدة ============
+# ===================== Helpers =====================
+def err_msg(resp_json):
+    return f"OKX error: code={resp_json.get('code')} msg={resp_json.get('msg')}"
+
 def to_df_okx(candles):
-    if not candles:
-        return pd.DataFrame(columns=["ts","open","high","low","close","volume"])
-    df = pd.DataFrame(candles).iloc[:, :6]
-    df.columns = ["ts","open","high","low","close","volume"]
-    df["ts"] = pd.to_numeric(df["ts"], errors="coerce").fillna(0).astype("int64")
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms", errors="coerce")
+    cols = ["ts","open","high","low","close","volume","volCcy","volQuote","confirm"]
+    df = pd.DataFrame(candles, columns=cols[:len(candles[0])])
+    df["ts"] = pd.to_datetime(df["ts"].astype(str).astype(np.int64), unit="ms")
     for c in ["open","high","low","close","volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+        df[c] = df[c].astype(float)
     return df.sort_values("ts").reset_index(drop=True)
 
 def plot_candles(df, title):
-    fig = go.Figure()
-
-    fig.add_trace(go.Candlestick(
+    fig = go.Figure(data=[go.Candlestick(
         x=df["ts"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
-        increasing_line_color='#00ff99', decreasing_line_color='#ff0066',
-        name="Candles"
-    ))
-
-    fig.add_trace(go.Bar(
-        x=df["ts"], y=df["volume"], name="Volume", marker_color="#3399ff",
-        opacity=0.4, yaxis="y2"
-    ))
-
-    if len(df) >= 20:
-        df["SMA20"] = df["close"].rolling(20).mean()
-        df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
-        fig.add_trace(go.Scatter(x=df["ts"], y=df["SMA20"], mode="lines",
-                                 name="SMA20", line=dict(color="#ffff00", width=1.5)))
-        fig.add_trace(go.Scatter(x=df["ts"], y=df["EMA50"], mode="lines",
-                                 name="EMA50", line=dict(color="#ff9900", width=1.5)))
-
+        increasing_line_color='lime', decreasing_line_color='red'
+    )])
     fig.update_layout(
-        template="plotly_dark",
-        title=title,
-        xaxis_rangeslider_visible=False,
-        height=600,
-        margin=dict(l=10, r=10, t=50, b=10),
-        yaxis=dict(title="السعر"),
-        yaxis2=dict(title="الحجم", overlaying="y", side="right", showgrid=False)
+        title=title, 
+        xaxis_rangeslider_visible=False, 
+        height=520,
+        title_font_size=24,
+        margin=dict(l=0, r=0, t=50, b=0),
+        plot_bgcolor="black",
+        paper_bgcolor="rgba(0,0,0,0.6)",
+        font=dict(color="white")
     )
     return fig
 
-def okx_inst_id(symbol, use_perp=True):
-    s = (symbol or "").strip().upper().replace("-", "").replace(" ", "")
-    if not s: return ""
-    if not s.endswith("USDT"): s += "USDT"
+# ===================== OKX API =====================
+def okx_inst_id(symbol_text, use_perp=True):
+    s = symbol_text.upper().replace("-", "")
+    if not s.endswith("USDT"):
+        s = f"{s}USDT"
     base = s[:-4]
     return f"{base}-USDT-SWAP" if use_perp else f"{base}-USDT"
 
 def okx_get_candles(instId, bar="15m", limit=200):
     url = "https://www.okx.com/api/v5/market/candles"
-    r = requests.get(url, params={"instId": instId, "bar": bar, "limit": limit}, headers={"User-Agent": "Mozilla/5.0"})
+    params = {"instId": instId, "bar": bar, "limit": limit}
+    r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
     r.raise_for_status()
     j = r.json()
-    return to_df_okx(j.get("data", [])) if j.get("code")=="0" else pd.DataFrame()
+    if j.get("code") != "0":
+        raise RuntimeError(err_msg(j))
+    return to_df_okx(j.get("data", []))
 
 def okx_get_open_interest(instId):
     url = "https://www.okx.com/api/v5/public/open-interest"
-    r = requests.get(url, params={"instId": instId}, headers={"User-Agent": "Mozilla/5.0"})
+    params = {"instId": instId}
+    r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
     r.raise_for_status()
     j = r.json()
-    return j.get("data", [])[0] if j.get("code")=="0" and j.get("data") else None
+    if j.get("code") != "0":
+        return None
+    return j.get("data", [])[0] if j.get("data") else None
 
+# ===================== OI Analysis =====================
 def analyze_oi(oi, df, threshold=5_000_000):
-    if not oi or df.empty: return ("❌ لا توجد بيانات كافية", "gray")
-    oi_usd = float(oi.get("oiUsd", 0))
+    if not oi or df.empty:
+        return {"msg":"❌ لا توجد بيانات كافية","color":"gray","icon":"❌"}
+    oi_usd = float(oi.get("oiUsd",0))
     last, prev = df["close"].iloc[-1], df["close"].iloc[-5]
     chg = ((last-prev)/prev)*100
-    if chg>1 and oi_usd>threshold: return ("🟢 صعود قوي مدعوم بزيادة OI", "green")
-    if chg>1: return ("🟡 صعود ضعيف مع OI منخفض", "orange")
-    if chg<-1 and oi_usd>threshold: return ("🔴 هبوط قوي مدعوم بزيادة OI", "red")
-    if chg<-1: return ("🟡 هبوط مع OI ضعيف", "orange")
-    if oi_usd>threshold: return ("⚖️ سعر ثابت وOI مرتفع → احتمال تجميع/تصريف", "blue")
-    return ("✅ حركة طبيعية وهادئة", "gray")
 
-# ============ واجهة المستخدم ============
-st.markdown("<h1 style='text-align:center;'>🚀 لوحة تحليل السوق اللحظي</h1>", unsafe_allow_html=True)
+    if chg > 1 and oi_usd > threshold:
+        return {"msg":"صعود قوي مدعوم بزيادة OI","color":"lime","icon":"🚀"}
+    if chg > 1:
+        return {"msg":"صعود ضعيف مع OI منخفض","color":"yellow","icon":"🟡"}
+    if chg < -1 and oi_usd > threshold:
+        return {"msg":"هبوط قوي مدعوم بزيادة OI","color":"red","icon":"🔻"}
+    if chg < -1:
+        return {"msg":"هبوط ضعيف مع OI منخفض","color":"orange","icon":"⚠️"}
+    if oi_usd > threshold:
+        return {"msg":"⚖️ سعر شبه ثابت مع OI مرتفع → احتمال تجميع/تصريف","color":"cyan","icon":"⚖️"}
+    return {"msg":"✅ حركة طبيعية وهادئة","color":"white","icon":"✅"}
+
+# ===================== UI =====================
+st.title("📊 أداة سوق العملات الرقمية — الشموع + Open Interest")
 
 with st.sidebar:
-    st.header("⚙️ الإعدادات")
-    sym = st.text_input("العملة:", "XRP")
-    tf = st.selectbox("الإطار الزمني", ["5m","15m","1h","4h","1d"], index=1)
-    limit = st.slider("عدد الشموع:", 50, 500, 200, 50)
-    use_perp = st.checkbox("عقود دائمة (SWAP)", True)
-    threshold = st.number_input("عتبة OI بالدولار", 100000, 20000000, 5000000, 500000)
-    go_btn = st.button("تحليل الآن 🔍")
+    st.header("⚙️ خيارات التحليل")
+    symbol_in = st.text_input("أدخل رمز العملة:", "BTC")
+    tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
+    limit = st.slider("عدد الشموع", 50, 500, 200, 10)
+    use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
+    analyze_button = st.button("🚀 جلب وتحليل البيانات")
 
-if go_btn:
-    inst = okx_inst_id(sym, use_perp)
-    df = okx_get_candles(inst, tf, limit)
-    oi = okx_get_open_interest(inst)
+if analyze_button:
+    with st.spinner('⏳ جارٍ جلب البيانات...'):
+        try:
+            instId = okx_inst_id(symbol_in, use_perp=use_perp_okx)
+            df = okx_get_candles(instId, bar=tf, limit=limit)
+            
+            if df.empty:
+                st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
+            else:
+                # عرض الرسم البياني
+                st.plotly_chart(plot_candles(df, f"OKX {instId} — {tf}"), use_container_width=True)
 
-    if df.empty:
-        st.error("⚠️ لا توجد بيانات للرمز.")
-    else:
-        st.plotly_chart(plot_candles(df, f"{inst} — {tf}"), use_container_width=True)
+                # عرض ملخص البيانات
+                st.subheader("📊 ملخص البيانات")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("📈 آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
+                col2.metric("🔼 أعلى سعر", f"{df['high'].max():,.4f}")
+                col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
+                
+                # قسم تحليل Open Interest
+                st.subheader("📦 Open Interest (OKX)")
+                oi = okx_get_open_interest(instId)
+                if oi:
+                    res = analyze_oi(oi, df)
+                    st.markdown(f"""
+                    <div style="
+                        background: rgba(20,20,20,0.8);
+                        border-left: 8px solid {res['color']};
+                        padding: 20px;
+                        border-radius: 10px;
+                        margin: 15px 0;
+                        font-size: 1.2em;
+                        color: {res['color']};
+                    ">
+                        <b style="font-size:1.5em;">{res['icon']} {res['msg']}</b>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
+                else:
+                    st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
 
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
-        c2.metric("أعلى", f"{df['high'].max():,.4f}")
-        c3.metric("أدنى", f"{df['low'].min():,.4f}")
-        c4.metric("تغير 5 شموع", f"{((df['close'].iloc[-1]-df['close'].iloc[-5])/df['close'].iloc[-5])*100:.2f}%")
-
-        st.subheader("📦 تحليل Open Interest")
-        if oi:
-            msg,color = analyze_oi(oi, df, threshold)
-            st.markdown(f"<h3 style='color:{color};'>{msg}</h3>", unsafe_allow_html=True)
-        else:
-            st.warning("لا بيانات OI.")
+        except requests.exceptions.HTTPError as e:
+            st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
+        except Exception as e:
+            st.error(f"❌ حدث خطأ غير متوقع: {e}")
