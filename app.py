@@ -6,11 +6,13 @@ import streamlit as st
 
 # ===================== API Functions =====================
 
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
 # Get Candlestick data from Bybit
 def get_candles(symbol="BTCUSDT", interval="15", limit=100):
     url = "https://api.bybit.com/v5/market/kline"
     params = {"category": "linear", "symbol": symbol.upper(), "interval": interval, "limit": limit}
-    r = requests.get(url, params=params, timeout=15)
+    r = requests.get(url, params=params, headers=HEADERS, timeout=15)
     r.raise_for_status()
     data = r.json()
     if data.get("retCode") != 0:
@@ -22,7 +24,7 @@ def get_candles(symbol="BTCUSDT", interval="15", limit=100):
 def get_open_interest(symbol="BTCUSDT", period="15min", limit=50):
     url = "https://api.bybit.com/v5/market/open-interest"
     params = {"category": "linear", "symbol": symbol.upper(), "intervalTime": period, "limit": limit}
-    r = requests.get(url, params=params, timeout=15)
+    r = requests.get(url, params=params, headers=HEADERS, timeout=15)
     r.raise_for_status()
     data = r.json()
     if data.get("retCode") != 0:
@@ -48,7 +50,7 @@ def analyze(candles, oi_list):
 
 # ===================== Visualization =====================
 def plot_candles(candles):
-    df = pd.DataFrame(candles, columns=["time","open","high","low","close","volume"])
+    df = pd.DataFrame(candles, columns=["time","open","high","low","close","volume","turnover"])
     df["time"] = pd.to_datetime(df["time"], unit="s")
     df["open"] = df["open"].astype(float)
     df["high"] = df["high"].astype(float)
