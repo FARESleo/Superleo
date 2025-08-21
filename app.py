@@ -150,6 +150,22 @@ def okx_get_candles(instId, bar="15m", limit=200):
             st.warning(f"⚠️ البيانات متأخرة بحوالي {int(time_diff)} دقيقة!")
     return df
 
+@st.cache_data(ttl=600)
+def okx_get_tickers(instType="SWAP"):
+    url = "https://www.okx.com/api/v5/market/tickers"
+    params = {"instType": instType}
+    try:
+        r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.raise_for_status()
+        j = r.json()
+        if j.get("code") != "0":
+            st.error(f"خطأ في جلب بيانات tickers: {err_msg(j)}")
+            return []
+        return j.get("data", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
+        return []
+
 def okx_get_open_interest(instId):
     url = "https://www.okx.com/api/v5/public/open-interest"
     params = {"instId": instId}
@@ -174,26 +190,6 @@ def okx_get_max_leverage(instId, instType="SWAP"):
         max_lever = float(data.get("lever", 1))
         return max_lever
     return None
-
-# ===================== Binance API for Market Tracker =====================
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def fetch_top_gainers_losers_binance(threshold=10.0):
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ خطأ في جلب البيانات من Binance: {e}")
-        return []
-
-    filtered_coins = [
-        c for c in data if "USDT" in c["symbol"] and 
-        float(c["priceChangePercent"]) >= threshold and
-        c["symbol"].endswith("USDT")
-    ]
-    
-    return sorted(filtered_coins, key=lambda c: float(c["priceChangePercent"]), reverse=True)
 
 # ===================== OI Analysis =====================
 def analyze_oi(df, oi, threshold=5_000_000):
@@ -294,27 +290,45 @@ if 'inst_id' not in st.session_state:
     st.session_state.inst_id = okx_inst_id(st.session_state.selected_symbol)
     
 st.markdown("---")
-st.header("⚡ متتبع السوق اللحظي")
+st.header("⚡ متتبع السوق اللحظي (OKX)")
 
-col_sel, col_btn = st.columns([1, 0.2])
+col_sel, col_type, col_btn = st.columns([1, 0.5, 0.2])
 with col_sel:
     threshold = st.selectbox("اختر عتبة التغيير (24 ساعة)", [1, 5, 10, 20, 50], index=2, key='threshold_select')
+with col_type:
+    change_type = st.radio("نوع التغيير", ["صعود (Gainers)", "هبوط (Losers)"], key='change_type')
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 تحديث العملات", key='update_coins_btn'):
         st.cache_data.clear()
         st.rerun()
 
-coins = fetch_top_gainers_losers_binance(threshold)
-if coins:
+tickers = okx_get_tickers(instType="SWAP")
+filtered_tickers = []
+if tickers:
+    for t in tickers:
+        try:
+            change_percent = float(t['sodUtc']) * 100
+            if change_type == "صعود (Gainers)" and change_percent >= threshold:
+                filtered_tickers.append(t)
+            elif change_type == "هبوط (Losers)" and change_percent <= -threshold:
+                filtered_tickers.append(t)
+        except (ValueError, KeyError):
+            continue
+
+    if change_type == "صعود (Gainers)":
+        filtered_tickers.sort(key=lambda x: float(x['sodUtc']), reverse=True)
+    else:
+        filtered_tickers.sort(key=lambda x: float(x['sodUtc']), reverse=False)
+
     st.info("⚠️ اضغط على زر 'جلب وتحليل البيانات' بعد اختيار العملة.")
     
-    coin_names = [f"**{c['symbol']}** ({float(c['priceChangePercent']):.2f}%) - السعر: ${float(c['lastPrice']):.4f}" for c in coins]
+    coin_names = [f"**{c['instId']}** ({float(c['sodUtc']) * 100:.2f}%) - السعر: ${float(c['last']):.4f}" for c in filtered_tickers]
     
     selected_coin_name = st.selectbox("اختر عملة من القائمة", coin_names, key='coin_select')
     
     if selected_coin_name:
-        selected_symbol = selected_coin_name.split('**')[1].split('**')[0]
+        selected_symbol = selected_coin_name.split('**')[1].split('**')[0].replace("-USDT-SWAP", "")
         if st.session_state.selected_symbol != selected_symbol:
             st.session_state.selected_symbol = selected_symbol
             st.session_state.symbol_changed = True
@@ -322,6 +336,10 @@ if coins:
         st.session_state.symbol_changed = False
     
     st.markdown("---")
+else:
+    st.warning("⚠️ لا توجد بيانات متاحة في الوقت الحالي.")
+    st.session_state.symbol_changed = False
+
 
 # Main Analysis Section
 st.header("🔍 تحليل العملة المختارة")
@@ -342,45 +360,4 @@ if analyze_button or st.session_state.get('symbol_changed'):
     with st.spinner('⏳ جارٍ جلب البيانات...'):
         try:
             instId = okx_inst_id(st.session_state.selected_symbol, use_perp=use_perp_okx)
-            df = okx_get_candles(instId, bar=tf, limit=limit)
-            st.session_state.df = df
-            st.session_state.inst_id = instId
-            
-            if df.empty:
-                st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
-            else:
-                st.plotly_chart(plot_line_chart(df, f"OKX {instId} — {tf}"), use_container_width=True)
-                st.subheader("📊 ملخص البيانات")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("📈 آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
-                col2.metric("🔼 أعلى سعر", f"{df['high'].max():,.4f}")
-                col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
-                
-                st.subheader("📦 تحليل Open Interest (OKX)")
-                oi = okx_get_open_interest(instId)
-                if oi:
-                    res_instant = analyze_oi(df, oi)
-                    if res_instant['risk'] == "Bullish":
-                        st.success(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
-                    elif res_instant['risk'] == "Bearish":
-                        st.error(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
-                    elif res_instant['risk'] == "High Risk":
-                        st.warning(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
-                    else:
-                        st.info(f"**{res_instant['icon']} {res_instant['msg']}** - مستوى الخطورة: **{res_instant['risk']}**")
-                    st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
-                else:
-                    st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
-                
-                trading_calculator(df, instId)
-        except requests.exceptions.HTTPError as e:
-            st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
-        except RuntimeError as e:
-            st.error(f"❌ حدث خطأ: {e}")
-        except Exception as e:
-            st.error(f"❌ حدث خطأ غير متوقع: {e}")
-
-# Display calculator on initial load if data is present
-if 'df' in st.session_state and not st.session_state.df.empty:
-    trading_calculator(st.session_state.df, st.session_state.inst_id)
-
+            df = okx_get_candles(instId, bar=tf, limit=limit
