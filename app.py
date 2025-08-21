@@ -78,19 +78,19 @@ def okx_get_candles(instId, bar="15m", limit=200):
         raise RuntimeError(err_msg(j))
     return to_df_okx(j.get("data", []))
 
-# ===================== OI Analysis (محسنة) =====================
-# هذه الدالة تم تعديلها لتعمل على البيانات التاريخية أيضاً
-def analyze_oi(df_row, threshold=5_000_000, lookback=5):
-    oi_usd = float(df_row.get("oiUsd", 0))
-    # التحقق من وجود بيانات كافية للحساب
-    if len(df_row.index) < lookback:
-        return "Unknown"
+def okx_get_open_interest(instId):
+    url = "https://www.okx.com/api/v5/public/open-interest"
+    params = {"instId": instId}
+    r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+    r.raise_for_status()
+    j = r.json()
+    if j.get("code") != "0":
+        return None
+    return j.get("data", [])[0] if j.get("data") else None
 
-    last_close = df_row["close"]
-    # استخدام بيانات الإغلاق السابقة من الصفوف السابقة
-    prev_close = df_row.shift(lookback)["close"]
-    
-    chg = ((last_close - prev_close) / prev_close) * 100
+# ===================== OI Analysis (محسنة) =====================
+def analyze_oi(close_price, prev_close_price, oi_usd, threshold=5_000_000):
+    chg = ((close_price - prev_close_price) / prev_close_price) * 100
     
     if chg > 1 and oi_usd > threshold:
         return "Bullish"
@@ -109,31 +109,27 @@ def analyze_oi(df_row, threshold=5_000_000, lookback=5):
     
     return "Neutral"
 
-def okx_get_open_interest(instId):
-    url = "https://www.okx.com/api/v5/public/open-interest"
-    params = {"instId": instId}
-    r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-    r.raise_for_status()
-    j = r.json()
-    if j.get("code") != "0":
-        return None
-    return j.get("data", [])[0] if j.get("data") else None
-
 # ===================== Backtesting Logic =====================
 def run_backtest(df):
     if df.empty:
-        return {"total_pnl": 0, "wins": 0, "losses": 0, "win_rate": 0}
+        return {"total_pnl": 0, "wins": 0, "losses": 0, "win_rate": 0, "avg_pnl": 0}
     
     trades = []
     position = None # 'long' or None
     buy_price = 0
     
     # محاكاة التداول
-    for i in range(len(df)):
+    for i in range(5, len(df)):
         current_row = df.iloc[i]
+        prev_close_price = df.iloc[i-5]["close"]
         
         # تحليل الإشارة
-        signal = analyze_oi(df.iloc[i:i+6], threshold=5_000_000)
+        oi_data = okx_get_open_interest(okx_inst_id(st.session_state.symbol, st.session_state.use_perp))
+        if not oi_data:
+            continue
+            
+        oi_usd = float(oi_data.get("oiUsd", 0))
+        signal = analyze_oi(current_row["close"], prev_close_price, oi_usd)
         
         if signal == "Bullish" and position is None:
             buy_price = current_row["close"]
@@ -182,14 +178,18 @@ with st.sidebar:
 # تخزين البيانات في حالة الجلسة لتجنب إعادة التحميل
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
+    st.session_state.symbol = ""
+    st.session_state.use_perp = True
 
 # عند النقر على "جلب وتحليل البيانات"
 if analyze_button:
+    st.session_state.symbol = symbol_in
+    st.session_state.use_perp = use_perp_okx
     with st.spinner('⏳ جارٍ جلب البيانات...'):
         try:
-            instId = okx_inst_id(symbol_in, use_perp=use_perp_okx)
+            instId = okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp)
             df = okx_get_candles(instId, bar=tf, limit=limit)
-            st.session_state.df = df # حفظ البيانات
+            st.session_state.df = df
             
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
@@ -203,38 +203,18 @@ if analyze_button:
                 col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
                 
                 st.subheader("📦 تحليل Open Interest (OKX)")
-                # تحليل آخر نقطة بيانات فقط
                 oi = okx_get_open_interest(instId)
                 if oi:
-                    # هذه دالة مصغرة للتحليل اللحظي
-                    def get_instant_analysis(oi_data, df_data):
-                        # استخدام آخر صف من البيانات فقط للتحليل اللحظي
-                        if df_data.empty: return {"msg": "No Data", "risk": "Unknown", "icon": "❌"}
-                        
-                        oi_usd = float(oi_data.get("oiUsd", 0))
-                        last_close = df_data["close"].iloc[-1]
-                        prev_close = df_data["close"].iloc[-5] if len(df_data) > 5 else last_close
-                        chg = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0
-                        
-                        if chg > 1 and oi_usd > 5_000_000:
-                            return {"msg": "صعود قوي + OI مرتفع → صاعد بقوة", "risk": "Bullish", "icon": "🚀"}
-                        elif chg < -1 and oi_usd > 5_000_000:
-                            return {"msg": "هبوط قوي + OI مرتفع → هابط بقوة", "risk": "Bearish", "icon": "🔻"}
-                        elif abs(chg) <= 1 and oi_usd > 5_000_000:
-                            return {"msg": "سعر شبه ثابت + OI مرتفع → تحرك وشيك", "risk": "High Risk", "icon": "⚖️"}
-                        else:
-                            return {"msg": "حركة طبيعية وهادئة", "risk": "Neutral", "icon": "✅"}
-
-                    res = get_instant_analysis(oi, df)
+                    res_instant = analyze_oi(df['close'].iloc[-1], df['close'].iloc[-5], float(oi.get("oiUsd", 0)))
                     
-                    if res['risk'] == "Bullish":
-                        st.success(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
-                    elif res['risk'] == "Bearish":
-                        st.error(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
-                    elif "Weak" in res['risk'] or "Medium" in res['risk'] or res['risk'] == "High Risk":
-                        st.warning(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                    if res_instant == "Bullish":
+                        st.success(f"**🚀 صعود قوي + OI مرتفع → صاعد بقوة** - مستوى الخطورة: **Bullish**")
+                    elif res_instant == "Bearish":
+                        st.error(f"**🔻 هبوط قوي + OI مرتفع → هابط بقوة** - مستوى الخطورة: **Bearish**")
+                    elif "Weak" in res_instant or res_instant == "High Risk":
+                        st.warning(f"**⚖️ تحرك وشيك: مراقبة حذرة. قد يكون صعوداً أو هبوطاً قوياً.** - مستوى الخطورة: **High Risk**")
                     else:
-                        st.info(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                        st.info(f"**✅ حركة طبيعية وهادئة** - مستوى الخطورة: **Neutral**")
                     
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
                 else:
@@ -270,3 +250,4 @@ if backtest_button:
             st.markdown(f"**ملاحظة**: التحليل يعتمد على استراتيجية بسيطة (شراء عند Bullish وبيع عند Bearish).")
     else:
         st.warning("⚠️ يرجى جلب البيانات أولاً قبل تشغيل التحليل التاريخي.")
+
