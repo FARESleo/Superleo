@@ -28,7 +28,7 @@ def err_msg(resp_json):
 def to_df_okx(candles):
     cols = ["ts","open","high","low","close","volume","volCcy","volQuote","confirm"]
     df = pd.DataFrame(candles, columns=cols[:len(candles[0])])
-    df["ts"] = pd.to_datetime(df["ts"].astype(str).astype(int), unit="ms")
+    df["ts"] = pd.to_datetime(df["ts"].astype(str).astype("int64"), unit="ms")
     for c in ["open","high","low","close","volume"]:
         df[c] = df[c].astype(float)
     return df.sort_values("ts").reset_index(drop=True)
@@ -78,25 +78,36 @@ def okx_get_open_interest(instId):
         return None
     return j.get("data", [])[0] if j.get("data") else None
 
-# ===================== OI Analysis =====================
+# ===================== OI Analysis (محسنة) =====================
 def analyze_oi(oi, df, threshold=5_000_000):
     if not oi or df.empty:
-        return {"msg":"❌ لا توجد بيانات كافية","color":"gray","icon":"❌"}
+        return {"msg":"❌ لا توجد بيانات كافية","color":"gray","icon":"❌","risk":"Unknown"}
+    
     oi_usd = float(oi.get("oiUsd",0))
     last, prev = df["close"].iloc[-1], df["close"].iloc[-5]
     chg = ((last-prev)/prev)*100
-
+    
+    oi_change = (oi_usd - threshold) / threshold * 100
+    
     if chg > 1 and oi_usd > threshold:
-        return {"msg":"🚀 صعود قوي مدعوم بزيادة OI","color":"lime","icon":"🚀"}
-    if chg > 1:
-        return {"msg":"🟡 صعود ضعيف مع OI منخفض","color":"yellow","icon":"🟡"}
+        return {"msg":"🚀 صعود قوي + OI مرتفع → احتمال استمرار الاتجاه الصاعد","color":"lime","icon":"🚀","risk":"Bullish"}
+    
+    if chg > 1 and oi_usd <= threshold:
+        return {"msg":"📈 صعود ضعيف مع OI منخفض → الاتجاه غير مدعوم بقوة","color":"yellow","icon":"📈","risk":"Weak Bullish"}
+    
     if chg < -1 and oi_usd > threshold:
-        return {"msg":"🔻 هبوط قوي مدعوم بزيادة OI","color":"red","icon":"🔻"}
-    if chg < -1:
-        return {"msg":"⚠️ هبوط ضعيف مع OI منخفض","color":"orange","icon":"⚠️"}
-    if oi_usd > threshold:
-        return {"msg":"⚖️ سعر شبه ثابت مع OI مرتفع → احتمال تجميع/تصريف","color":"cyan","icon":"⚖️"}
-    return {"msg":"✅ حركة طبيعية وهادئة","color":"white","icon":"✅"}
+        return {"msg":"🔻 هبوط قوي + OI مرتفع → احتمال ضغط بيعي أو تصريف","color":"red","icon":"🔻","risk":"Bearish"}
+    
+    if chg < -1 and oi_usd <= threshold:
+        return {"msg":"⚠️ هبوط ضعيف مع OI منخفض → لا يوجد ضغط كبير","color":"orange","icon":"⚠️","risk":"Weak Bearish"}
+    
+    if abs(chg) <= 1 and oi_usd > threshold:
+        if oi_change > 20:
+            return {"msg":"🔴 سعر شبه ثابت + OI يرتفع بسرعة → احتمال فخ (تجميع/تصريف)","color":"cyan","icon":"⚖️","risk":"High Risk"}
+        else:
+            return {"msg":"🟡 سعر شبه ثابت + OI مرتفع → مراقبة لاحتمال تحرك كبير","color":"cyan","icon":"⚖️","risk":"Medium Risk"}
+    
+    return {"msg":"✅ حركة طبيعية وهادئة","color":"white","icon":"✅","risk":"Neutral"}
 
 # ===================== UI =====================
 st.title("📊 أداة سوق العملات الرقمية — الشموع + Open Interest")
@@ -118,17 +129,14 @@ if analyze_button:
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
             else:
-                # عرض الرسم البياني
                 st.plotly_chart(plot_candles(df, f"OKX {instId} — {tf}"), use_container_width=True)
 
-                # عرض ملخص البيانات
                 st.subheader("📊 ملخص البيانات")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("📈 آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
                 col2.metric("🔼 أعلى سعر", f"{df['high'].max():,.4f}")
                 col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
                 
-                # قسم تحليل Open Interest
                 st.subheader("📦 Open Interest (OKX)")
                 oi = okx_get_open_interest(instId)
                 if oi:
@@ -140,10 +148,11 @@ if analyze_button:
                         padding: 20px;
                         border-radius: 10px;
                         margin: 15px 0;
-                        font-size: 1.3em;
+                        font-size: 1.2em;
                         color: {res['color']};
                     ">
-                        <b style="font-size:1.5em;">{res['icon']} {res['msg']}</b>
+                        <b style="font-size:1.5em;">{res['icon']} {res['msg']}</b><br>
+                        🧭 مستوى الخطورة: <b style="color:{res['color']}">{res['risk']}</b>
                     </div>
                     """, unsafe_allow_html=True)
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
