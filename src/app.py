@@ -1,113 +1,101 @@
-import streamlit as st
-from api_binance import get_candles, get_long_short_ratio
-from api_bybit import get_open_interest
-from analyzer import analyze
-from visualizer import plot_candles
-import plotly.graph_objects as go
+import requests
 import pandas as pd
-import time
+import numpy as np
+import plotly.graph_objects as go
+import streamlit as st
 
-st.set_page_config(page_title="Crypto Market Tool", layout="wide")
+# ===================== API Functions =====================
 
-# وظيفة تحويل interval إلى تنسيق Bybit
-def to_bybit_interval(interval):
-    """تحويل interval إلى تنسيق Bybit (رقم دقائق فقط)."""
+# Binance: Candlestick data
+def get_candles(symbol="BTCUSDT", interval="15m", limit=100):
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+# Binance: Long/Short ratio
+def get_long_short_ratio(symbol="BTCUSDT", period="15m", limit=50):
+    url = "https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
+    params = {"symbol": symbol.upper(), "period": period, "limit": limit}
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+# Bybit (v5): Open Interest
+def get_open_interest(symbol="BTCUSDT", period="15min", limit=50):
+    url = "https://api.bybit.com/v5/market/open-interest"
+    params = {
+        "category": "linear",
+        "symbol": symbol.upper(),
+        "intervalTime": period,  # v5 uses "intervalTime"
+        "limit": limit
+    }
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("retCode") != 0:
+        st.warning(f"⚠️ Bybit API error: {data.get('retMsg')}")
+        return []
+    return data.get("result", {}).get("list", [])
+
+# ===================== Analyzer =====================
+def analyze(candles, oi_list, ratio_data):
     try:
-        if interval.endswith('m'):
-            return interval.rstrip('m')
-        elif interval.endswith('h'):
-            num = int(interval.rstrip('h'))
-            return str(num * 60)
-        elif interval.endswith('d'):
-            num = int(interval.rstrip('d'))
-            return str(num * 1440)
-        else:
-            return interval
-    except ValueError:
-        return "15"
+        last_oi = float(oi_list[-1]["openInterest"])
+        avg_oi = np.mean([float(x["openInterest"]) for x in oi_list])
+        long_ratio = float(ratio_data[-1]["longShortRatio"])
+    except Exception:
+        return {"status": "error", "message": "البيانات غير كافية للتحليل"}
 
-# وظائف باستخدام التخزين المؤقت
-@st.cache_data(ttl=300)
-def fetch_candles(symbol, interval):
-    return get_candles(symbol, interval)
+    if last_oi > avg_oi * 1.2 and long_ratio > 1.5:
+        return {"signal": "⚠️ احتمال فخ صانع سوق", "oi": last_oi, "ratio": long_ratio}
+    else:
+        return {"signal": "✅ حركة طبيعية", "oi": last_oi, "ratio": long_ratio}
 
-@st.cache_data(ttl=300)
-def fetch_ratios(symbol, interval):
-    return get_long_short_ratio(symbol, interval)
+# ===================== Visualization =====================
+def plot_candles(candles):
+    df = pd.DataFrame(candles, columns=[
+        "time","open","high","low","close","volume","c1","c2","c3","c4","c5","c6"
+    ])
+    df["time"] = pd.to_datetime(df["time"], unit="ms")
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
 
-@st.cache_data(ttl=300)
-def fetch_oi(symbol, interval):
-    return get_open_interest(symbol, interval)
+    fig = go.Figure(data=[go.Candlestick(
+        x=df["time"],
+        open=df["open"],
+        high=df["high"],
+        low=df["low"],
+        close=df["close"]
+    )])
+    fig.update_layout(title="Candlestick Chart", xaxis_rangeslider_visible=False)
+    return fig
 
+# ===================== Streamlit App =====================
+st.set_page_config(page_title="Crypto Market Tool", layout="wide")
 st.title("📊 Crypto Market Tool")
 
-# إدخال المستخدم
-col1, col2 = st.columns(2)
-with col1:
-    symbol = st.text_input("أدخل رمز العملة (مثال: BTCUSDT)", "BTCUSDT").upper()
-with col2:
-    interval = st.selectbox("اختر الفاصل الزمني", ["5m", "15m", "30m", "1h", "4h"], index=1)
+symbol = st.text_input("أدخل رمز العملة (مثال: BTCUSDT)", "BTCUSDT")
 
 if st.button("تحليل"):
-    with st.spinner("جاري جلب البيانات..."):
-        # جلب البيانات مع تأخير صغير
-        time.sleep(1)
-        candles = fetch_candles(symbol, interval)
-        if isinstance(candles, dict) and "error" in candles:
-            if "test_data" in candles:
-                st.warning(candles["error"])
-                candles = candles["test_data"]
+    with st.spinner("⏳ جاري جلب البيانات..."):
+        try:
+            candles = get_candles(symbol)
+            ratios = get_long_short_ratio(symbol)
+            oi_list = get_open_interest(symbol)
+
+            if not oi_list or not ratios:
+                st.error("⚠️ لم يتم جلب بيانات كافية (جرّب رمز آخر أو فترة مختلفة).")
             else:
-                st.error(candles["error"])
-                st.stop()
+                signal = analyze(candles, oi_list, ratios)
 
-        ratios = fetch_ratios(symbol, interval)
-        if isinstance(ratios, dict) and "error" in ratios:
-            if "test_data" in ratios:
-                st.warning(ratios["error"])
-                ratios = ratios["test_data"]
-            else:
-                st.error(ratios["error"])
-                st.stop()
+                st.subheader("🔍 نتيجة التحليل")
+                st.json(signal)
 
-        bybit_interval = to_bybit_interval(interval)
-        oi = fetch_oi(symbol, bybit_interval)
-        if isinstance(oi, dict) and "error" in oi:
-            if "test_data" in oi:
-                st.warning(oi["error"])
-                oi = {"result": {"list": oi["test_data"]}}
-            else:
-                st.error(oi["error"])
-                st.stop()
-
-        # إجراء التحليل
-        signal = analyze(candles, oi["result"]["list"], ratios)
-
-        if "status" in signal and signal["status"] == "error":
-            st.error(signal["message"])
-        else:
-            st.subheader("🔍 نتيجة التحليل")
-            st.write(f"**الإشارة**: {signal['signal']}")
-            st.write(f"**Open Interest**: {signal['oi']:.2f}")
-            st.write(f"**متوسط OI**: {signal['avg_oi']:.2f}")
-            st.write(f"**Long/Short Ratio**: {signal['ratio']:.2f}")
-            st.write(f"**تغير السعر**: {signal['price_change']:.2f}%")
-
-            st.subheader("📈 الرسم البياني")
-            candle_fig = plot_candles(candles)
-            if isinstance(candle_fig, dict) and "error" in candle_fig:
-                st.error(candle_fig["error"])
-            else:
-                st.plotly_chart(candle_fig, use_container_width=True)
-
-            st.subheader("📊 Open Interest")
-            df_oi = pd.DataFrame(oi["result"]["list"])
-            df_oi["timestamp"] = pd.to_datetime(df_oi["timestamp"], unit="ms")
-            fig_oi = go.Figure(data=[go.Scatter(
-                x=df_oi["timestamp"],
-                y=df_oi["openInterest"].astype(float),
-                mode="lines",
-                name="Open Interest"
-            )])
-            fig_oi.update_layout(title="Open Interest Over Time")
-            st.plotly_chart(fig_oi, use_container_width=True)
+                st.subheader("📈 الرسم البياني")
+                st.plotly_chart(plot_candles(candles), use_container_width=True)
+        except Exception as e:
+            st.error(f"حدث خطأ: {e}")
