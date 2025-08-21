@@ -139,7 +139,6 @@ def okx_get_candles(instId, bar="15m", limit=200):
     r.raise_for_status()
     j = r.json()
     if j.get("code") != "0":
-        # Handle the specific OKX error
         raise RuntimeError(err_msg(j))
     df = to_df_okx(j.get("data", []))
     if not df.empty:
@@ -176,33 +175,25 @@ def okx_get_max_leverage(instId, instType="SWAP"):
         return max_lever
     return None
 
-# ===================== CoinGecko API for Market Tracker =====================
-@st.cache_data(ttl=600)  # Cache for 10 minutes to reduce API calls
-def fetch_top_gainers_losers(threshold=1.0):
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    coins_data = []
+# ===================== Binance API for Market Tracker =====================
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_top_gainers_losers_binance(threshold=10.0):
+    url = "https://api.binance.com/api/v3/ticker/24hr"
     try:
-        for page in range(1, 3):
-            params = {
-                "vs_currency": "usd",
-                "order": "market_cap_desc",
-                "per_page": 250,
-                "page": page,
-                "price_change_percentage": "24h"
-            }
-            r = requests.get(url, params=params, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-            coins_data.extend(data)
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ خطأ في جلب البيانات من CoinGecko: {e}")
+        st.error(f"❌ خطأ في جلب البيانات من Binance: {e}")
         return []
-    
+
     filtered_coins = [
-        c for c in coins_data if c.get("price_change_percentage_24h") and 
-        abs(c["price_change_percentage_24h"]) >= threshold
+        c for c in data if "USDT" in c["symbol"] and 
+        float(c["priceChangePercent"]) >= threshold and
+        c["symbol"].endswith("USDT")
     ]
-    return sorted(filtered_coins, key=lambda c: c["price_change_percentage_24h"], reverse=True)
+    
+    return sorted(filtered_coins, key=lambda c: float(c["priceChangePercent"]), reverse=True)
 
 # ===================== OI Analysis =====================
 def analyze_oi(df, oi, threshold=5_000_000):
@@ -307,35 +298,25 @@ st.header("⚡ متتبع السوق اللحظي")
 
 col_sel, col_btn = st.columns([1, 0.2])
 with col_sel:
-    threshold = st.selectbox("اختر عتبة التغيير (24 ساعة)", [1, 5, 10, 20, 50, 100], index=2, key='threshold_select')
+    threshold = st.selectbox("اختر عتبة التغيير (24 ساعة)", [1, 5, 10, 20, 50], index=2, key='threshold_select')
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 تحديث العملات", key='update_coins_btn'):
         st.cache_data.clear()
         st.rerun()
 
-coins = fetch_top_gainers_losers(threshold)
+coins = fetch_top_gainers_losers_binance(threshold)
 if coins:
     st.info("⚠️ اضغط على زر 'جلب وتحليل البيانات' بعد اختيار العملة.")
     
-    symbols_okx = {c['symbol'].upper() for c in coins}
-    
-    filtered_for_okx = []
-    for coin in coins:
-        inst_id = okx_inst_id(coin['symbol'])
-        # A simple check to see if the coin is likely available on OKX
-        if inst_id.endswith('-SWAP') or inst_id.endswith('-USDT'):
-            filtered_for_okx.append(coin)
-
-    coin_names = [f"**{c['name']}** ({c['symbol'].upper()}) - {c['price_change_percentage_24h']:.2f}%" for c in filtered_for_okx]
+    coin_names = [f"**{c['symbol']}** ({float(c['priceChangePercent']):.2f}%) - السعر: ${float(c['lastPrice']):.4f}" for c in coins]
     
     selected_coin_name = st.selectbox("اختر عملة من القائمة", coin_names, key='coin_select')
     
-    # Extract symbol from selected_coin_name and update session state
     if selected_coin_name:
-        selected_symbol_from_list = selected_coin_name.split('(')[1].split(')')[0]
-        if st.session_state.selected_symbol != selected_symbol_from_list:
-            st.session_state.selected_symbol = selected_symbol_from_list
+        selected_symbol = selected_coin_name.split('**')[1].split('**')[0]
+        if st.session_state.selected_symbol != selected_symbol:
+            st.session_state.selected_symbol = selected_symbol
             st.session_state.symbol_changed = True
     else:
         st.session_state.symbol_changed = False
@@ -400,6 +381,6 @@ if analyze_button or st.session_state.get('symbol_changed'):
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
 
 # Display calculator on initial load if data is present
-if not st.session_state.df.empty:
+if 'df' in st.session_state and not st.session_state.df.empty:
     trading_calculator(st.session_state.df, st.session_state.inst_id)
 
