@@ -337,7 +337,7 @@ if tickers:
     
     st.markdown("---")
 else:
-    st.warning("⚠️ لا توجد بيانات متاحة في الوقت الحالي.")
+    st.warning("⚠️ لا توجد بيانات متاحة في الوقت الحالي. حاول تغيير عتبة التغيير.")
     st.session_state.symbol_changed = False
 
 
@@ -389,19 +389,19 @@ if analyze_button or st.session_state.get('symbol_changed'):
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
-                
-                trading_calculator(df, instId)
         except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except RuntimeError as e:
             st.error(f"❌ حدث خطأ: {e}")
         except Exception as e:
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
+            st.exception(e)
 
-# Display calculator on initial load if data is present
+# Display calculator only once
 if 'df' in st.session_state and not st.session_state.df.empty:
     trading_calculator(st.session_state.df, st.session_state.inst_id)
     
 # Clean up symbol_changed after use
 if 'symbol_changed' in st.session_state:
     del st.session_state.symbol_changed
+
