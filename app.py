@@ -70,6 +70,10 @@ def okx_inst_id(symbol_text, use_perp=True):
 
 def okx_get_candles(instId, bar="15m", limit=200):
     url = "https://www.okx.com/api/v5/market/candles"
+    # تعديل here لتصحيح الخطأ
+    if bar in ["1h", "2h", "4h", "6h", "12h", "1d"]:
+        bar = bar + "utc"
+        
     params = {"instId": instId, "bar": bar, "limit": limit}
     r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
     r.raise_for_status()
@@ -94,7 +98,6 @@ def analyze_oi(df, oi, threshold=5_000_000):
         return {"msg": "❌ لا توجد بيانات كافية", "risk": "Unknown", "icon": "❌"}
 
     oi_usd = float(oi.get("oiUsd", 0))
-    # للتأكد من وجود بيانات كافية للحساب
     if len(df) < 5:
         return {"msg": "❌ بيانات غير كافية للتحليل", "risk": "Unknown", "icon": "❌"}
 
