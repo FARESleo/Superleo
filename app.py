@@ -3,12 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime, timezone
-from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="📊 أداة سوق العملات الرقمية", layout="wide")
-
-# إضافة تحديث تلقائي كل 15 ثانية
-st_autorefresh(interval=15 * 1000, key="datarefresh")
 
 # ===================== CSS (خلفية + تنسيق) =====================
 st.markdown("""
@@ -144,8 +140,8 @@ if 'df' not in st.session_state:
     st.session_state.symbol = ""
     st.session_state.use_perp = True
 
-# تحديث البيانات عند النقر أو التحديث التلقائي
-if analyze_button or st.session_state.symbol:
+# تحديث البيانات عند النقر على الزر
+if analyze_button:
     st.session_state.symbol = symbol_in
     st.session_state.use_perp = use_perp_okx
     with st.spinner('⏳ جارٍ جلب البيانات...'):
