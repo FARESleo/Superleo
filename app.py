@@ -33,11 +33,20 @@ def to_df_okx(candles):
         df[c] = df[c].astype(float)
     return df.sort_values("ts").reset_index(drop=True)
 
-def plot_candles(df, title):
-    fig = go.Figure(data=[go.Candlestick(
-        x=df["ts"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
-        increasing_line_color='lime', decreasing_line_color='red'
-    )])
+def plot_line_chart(df, title):
+    fig = go.Figure()
+    
+    # إضافة الرسم البياني الخطي
+    fig.add_trace(go.Scatter(x=df["ts"], y=df["close"], mode='lines', name='السعر', line=dict(color='cyan', width=2)))
+    
+    # حساب وإضافة المتوسط المتحرك (50 شمعة)
+    df['SMA_50'] = df['close'].rolling(window=50).mean()
+    fig.add_trace(go.Scatter(x=df["ts"], y=df['SMA_50'], mode='lines', name='SMA 50', line=dict(color='yellow', dash='dot')))
+
+    # حساب وإضافة المتوسط المتحرك (200 شمعة)
+    df['SMA_200'] = df['close'].rolling(window=200).mean()
+    fig.add_trace(go.Scatter(x=df["ts"], y=df['SMA_200'], mode='lines', name='SMA 200', line=dict(color='orange', dash='dot')))
+
     fig.update_layout(
         title=title, 
         xaxis_rangeslider_visible=False, 
@@ -46,7 +55,8 @@ def plot_candles(df, title):
         margin=dict(l=0, r=0, t=50, b=0),
         plot_bgcolor="black",
         paper_bgcolor="rgba(0,0,0,0.6)",
-        font=dict(color="white")
+        font=dict(color="white"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     return fig
 
@@ -90,27 +100,27 @@ def analyze_oi(oi, df, threshold=5_000_000):
     oi_change = (oi_usd - threshold) / threshold * 100
     
     if chg > 1 and oi_usd > threshold:
-        return {"msg":"🚀 صعود قوي + OI مرتفع → احتمال استمرار الاتجاه الصاعد","color":"lime","icon":"🚀","risk":"Bullish"}
+        return {"msg":"صعود قوي + OI مرتفع → احتمال استمرار الاتجاه الصاعد","color":"lime","icon":"🚀","risk":"Bullish"}
     
     if chg > 1 and oi_usd <= threshold:
-        return {"msg":"📈 صعود ضعيف مع OI منخفض → الاتجاه غير مدعوم بقوة","color":"yellow","icon":"📈","risk":"Weak Bullish"}
+        return {"msg":"صعود ضعيف مع OI منخفض → الاتجاه غير مدعوم بقوة","color":"yellow","icon":"📈","risk":"Weak Bullish"}
     
     if chg < -1 and oi_usd > threshold:
-        return {"msg":"🔻 هبوط قوي + OI مرتفع → احتمال ضغط بيعي أو تصريف","color":"red","icon":"🔻","risk":"Bearish"}
+        return {"msg":"هبوط قوي + OI مرتفع → احتمال ضغط بيعي أو تصريف","color":"red","icon":"🔻","risk":"Bearish"}
     
     if chg < -1 and oi_usd <= threshold:
-        return {"msg":"⚠️ هبوط ضعيف مع OI منخفض → لا يوجد ضغط كبير","color":"orange","icon":"⚠️","risk":"Weak Bearish"}
+        return {"msg":"هبوط ضعيف مع OI منخفض → لا يوجد ضغط كبير","color":"orange","icon":"⚠️","risk":"Weak Bearish"}
     
     if abs(chg) <= 1 and oi_usd > threshold:
         if oi_change > 20:
-            return {"msg":"🔴 سعر شبه ثابت + OI يرتفع بسرعة → احتمال فخ (تجميع/تصريف)","color":"cyan","icon":"⚖️","risk":"High Risk"}
+            return {"msg":"سعر شبه ثابت + OI يرتفع بسرعة → احتمال فخ (تجميع/تصريف)","color":"cyan","icon":"⚖️","risk":"High Risk"}
         else:
-            return {"msg":"🟡 سعر شبه ثابت + OI مرتفع → مراقبة لاحتمال تحرك كبير","color":"cyan","icon":"⚖️","risk":"Medium Risk"}
+            return {"msg":"سعر شبه ثابت + OI مرتفع → مراقبة لاحتمال تحرك كبير","color":"cyan","icon":"⚖️","risk":"Medium Risk"}
     
-    return {"msg":"✅ حركة طبيعية وهادئة","color":"white","icon":"✅","risk":"Neutral"}
+    return {"msg":"حركة طبيعية وهادئة","color":"white","icon":"✅","risk":"Neutral"}
 
 # ===================== UI =====================
-st.title("📊 أداة سوق العملات الرقمية — الشموع + Open Interest")
+st.title("📊 أداة سوق العملات الرقمية — تحليل Open Interest")
 
 with st.sidebar:
     st.header("⚙️ خيارات التحليل")
@@ -129,7 +139,7 @@ if analyze_button:
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
             else:
-                st.plotly_chart(plot_candles(df, f"OKX {instId} — {tf}"), use_container_width=True)
+                st.plotly_chart(plot_line_chart(df, f"OKX {instId} — {tf}"), use_container_width=True)
 
                 st.subheader("📊 ملخص البيانات")
                 col1, col2, col3 = st.columns(3)
@@ -137,24 +147,22 @@ if analyze_button:
                 col2.metric("🔼 أعلى سعر", f"{df['high'].max():,.4f}")
                 col3.metric("🔽 أدنى سعر", f"{df['low'].min():,.4f}")
                 
-                st.subheader("📦 Open Interest (OKX)")
+                st.subheader("📦 تحليل Open Interest (OKX)")
                 oi = okx_get_open_interest(instId)
                 if oi:
                     res = analyze_oi(oi, df)
-                    st.markdown(f"""
-                    <div style="
-                        background: rgba(20,20,20,0.8);
-                        border-left: 8px solid {res['color']};
-                        padding: 20px;
-                        border-radius: 10px;
-                        margin: 15px 0;
-                        font-size: 1.2em;
-                        color: {res['color']};
-                    ">
-                        <b style="font-size:1.5em;">{res['icon']} {res['msg']}</b><br>
-                        🧭 مستوى الخطورة: <b style="color:{res['color']}">{res['risk']}</b>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    
+                    if res['risk'] == "Bullish":
+                        st.success(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                    elif res['risk'] == "Bearish":
+                        st.error(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                    elif "Weak" in res['risk'] or "Medium" in res['risk']:
+                        st.warning(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                    elif res['risk'] == "High Risk":
+                        st.info(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                    else:
+                        st.info(f"**{res['icon']} {res['msg']}** - مستوى الخطورة: **{res['risk']}**")
+                    
                     st.caption(f"🕒 آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
