@@ -139,6 +139,7 @@ def okx_get_candles(instId, bar="15m", limit=200):
     r.raise_for_status()
     j = r.json()
     if j.get("code") != "0":
+        # Handle the specific OKX error
         raise RuntimeError(err_msg(j))
     df = to_df_okx(j.get("data", []))
     if not df.empty:
@@ -176,26 +177,26 @@ def okx_get_max_leverage(instId, instType="SWAP"):
     return None
 
 # ===================== CoinGecko API for Market Tracker =====================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)  # Cache for 10 minutes to reduce API calls
 def fetch_top_gainers_losers(threshold=1.0):
     url = "https://api.coingecko.com/api/v3/coins/markets"
     coins_data = []
-    for page in range(1, 3):
-        params = {
-            "vs_currency": "usd",
-            "order": "market_cap_desc",
-            "per_page": 250,
-            "page": page,
-            "price_change_percentage": "24h"
-        }
-        try:
+    try:
+        for page in range(1, 3):
+            params = {
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": 250,
+                "page": page,
+                "price_change_percentage": "24h"
+            }
             r = requests.get(url, params=params, timeout=15)
             r.raise_for_status()
             data = r.json()
             coins_data.extend(data)
-        except requests.exceptions.RequestException as e:
-            st.error(f"❌ خطأ في جلب البيانات من CoinGecko: {e}")
-            return []
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ خطأ في جلب البيانات من CoinGecko: {e}")
+        return []
     
     filtered_coins = [
         c for c in coins_data if c.get("price_change_percentage_24h") and 
@@ -228,34 +229,37 @@ def trading_calculator(df, instId):
         st.error("❌ لا توجد بيانات لعرض الحاسبة. يرجى جلب البيانات أولاً.")
         return
 
-    max_lever = okx_get_max_leverage(instId) or 125.0
-    imr_default = 100 / max_lever
-    mmr_default = imr_default / 2
+    try:
+        max_lever = okx_get_max_leverage(instId) or 125.0
+    except Exception as e:
+        st.warning(f"⚠️ فشل في جلب أقصى رافعة مالية. سيتم استخدام القيمة الافتراضية 125x. (الخطأ: {e})")
+        max_lever = 125.0
+
+    imr_default = 100 / max_lever if max_lever > 0 else 1
+    mmr_default = imr_default / 2 if imr_default > 0 else 0.5
 
     st.subheader("📈 حاسبة التداول المتقدمة")
     with st.expander("افتح الحاسبة", expanded=True):
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            imr = st.number_input("الهامش المبدئي (IMR %)", min_value=0.1, max_value=100.0, value=imr_default, step=0.1)
-            mmr = st.number_input("هامش الحفاظ (MMR %)", min_value=0.1, max_value=100.0, value=mmr_default, step=0.1)
-            capital = st.number_input("المبلغ (USDT)", min_value=1.0, value=10.0, step=1.0)
+            imr = st.number_input("الهامش المبدئي (IMR %)", min_value=0.1, max_value=100.0, value=imr_default, step=0.1, key="imr")
+            mmr = st.number_input("هامش الحفاظ (MMR %)", min_value=0.1, max_value=100.0, value=mmr_default, step=0.1, key="mmr")
+            capital = st.number_input("المبلغ (USDT)", min_value=1.0, value=10.0, step=1.0, key="capital")
 
         with col2:
-            current_price = st.number_input("السعر الحالي", min_value=0.01, value=float(df["close"].iloc[-1]), step=0.01)
-            target_price = st.number_input("سعر الهدف", min_value=0.01, value=float(df["close"].iloc[-1]) * 1.05, step=0.01)
-            direction = st.selectbox("الاتجاه", ["📈 شراء (Long)", "📉 بيع (Short)"])
+            current_price = st.number_input("السعر الحالي", min_value=0.01, value=float(df["close"].iloc[-1]), step=0.01, key="current_price")
+            target_price = st.number_input("سعر الهدف", min_value=0.01, value=float(df["close"].iloc[-1]) * 1.05, step=0.01, key="target_price")
+            direction = st.selectbox("الاتجاه", ["📈 شراء (Long)", "📉 بيع (Short)"], key="direction")
 
         with col3:
-            trading_fees_percent = st.number_input("رسوم التداول (%)", min_value=0.0, max_value=10.0, value=0.05, step=0.01)
-            # الهامش المتاح (مدخل يدوي لعدم وجود ربط مباشر بالمنصة)
-            available_margin = st.number_input("الهامش المتاح في المحفظة", min_value=0.0, value=1000.0, step=100.0)
-            leverage = st.slider("الرافعة المالية", min_value=1, max_value=int(max_lever), value=int(max_lever/2))
+            trading_fees_percent = st.number_input("رسوم التداول (%)", min_value=0.0, max_value=10.0, value=0.05, step=0.01, key="fees")
+            available_margin = st.number_input("الهامش المتاح في المحفظة", min_value=0.0, value=1000.0, step=100.0, key="available_margin")
+            leverage = st.slider("الرافعة المالية", min_value=1, max_value=int(max_lever), value=int(max_lever/2), key="leverage")
 
-        # Calculations
         margin_diff = imr - mmr
         
-        if margin_diff <= 0 or any(v is None for v in [imr, mmr, capital, current_price, target_price]):
+        if margin_diff <= 0 or any(v is None for v in [imr, mmr, capital, current_price, target_price, trading_fees_percent, available_margin, leverage]):
             st.error("⚠️ يرجى إدخال قيم صالحة لجميع الحقول.")
             return
 
@@ -263,13 +267,8 @@ def trading_calculator(df, instId):
         actual_price_change = -price_change if direction == "📉 بيع (Short)" else price_change
         roi_percent = actual_price_change * leverage
         
-        # Gross PnL
         gross_pnl_value = (capital * roi_percent) / 100
-        
-        # Fees calculation
-        fees_value = capital * (trading_fees_percent / 100) * 2  # Entry + Exit fees
-        
-        # Net PnL
+        fees_value = capital * (trading_fees_percent / 100) * 2
         net_pnl_value = gross_pnl_value - fees_value
         
         if direction == "📈 شراء (Long)":
@@ -288,7 +287,6 @@ def trading_calculator(df, instId):
             st.metric("الربح الصافي (Net PnL)", f"{net_pnl_value:.2f} USDT", delta_color="inverse" if net_pnl_value < 0 else "normal")
             st.metric("سعر التصفية", f"{liquidation_price:.4f}")
 
-        # اقتراح الصفقة بناءً على التحليل
         oi = okx_get_open_interest(instId)
         analysis = analyze_oi(st.session_state.df, oi) if oi else {"risk": "Unknown"}
         st.subheader("📊 اقتراح الصفقة")
@@ -297,35 +295,51 @@ def trading_calculator(df, instId):
 # ===================== UI =====================
 st.title("📊 أداة سوق العملات الرقمية — تحليل Open Interest")
 
-# إدارة الحالة في Streamlit
 if 'selected_symbol' not in st.session_state:
     st.session_state.selected_symbol = "BTC"
-
-# Market Tracker Section
+if 'df' not in st.session_state:
+    st.session_state.df = pd.DataFrame()
+if 'inst_id' not in st.session_state:
+    st.session_state.inst_id = okx_inst_id(st.session_state.selected_symbol)
+    
 st.markdown("---")
 st.header("⚡ متتبع السوق اللحظي")
 
 col_sel, col_btn = st.columns([1, 0.2])
 with col_sel:
-    threshold = st.selectbox("اختر عتبة التغيير (24 ساعة)", [1, 5, 10, 20, 50, 100], index=2)
+    threshold = st.selectbox("اختر عتبة التغيير (24 ساعة)", [1, 5, 10, 20, 50, 100], index=2, key='threshold_select')
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🔄 تحديث العملات"):
+    if st.button("🔄 تحديث العملات", key='update_coins_btn'):
         st.cache_data.clear()
+        st.rerun()
 
 coins = fetch_top_gainers_losers(threshold)
 if coins:
-    st.info("⚠️ اضغط على أي عملة في الجدول لتحليلها.")
-    coin_symbols = [c['symbol'].upper() for c in coins]
-    coin_names = [f"**{c['name']}** ({c['symbol'].upper()}) - {c['price_change_percentage_24h']:.2f}%" for c in coins]
+    st.info("⚠️ اضغط على زر 'جلب وتحليل البيانات' بعد اختيار العملة.")
     
-    selected_coin_name = st.selectbox("اختر عملة من القائمة", coin_names)
-    selected_symbol = [c for c in coins if f"({c['symbol'].upper()})" in selected_coin_name][0]['symbol']
+    symbols_okx = {c['symbol'].upper() for c in coins}
     
-    if st.session_state.selected_symbol != selected_symbol:
-        st.session_state.selected_symbol = selected_symbol
-        st.rerun()
+    filtered_for_okx = []
+    for coin in coins:
+        inst_id = okx_inst_id(coin['symbol'])
+        # A simple check to see if the coin is likely available on OKX
+        if inst_id.endswith('-SWAP') or inst_id.endswith('-USDT'):
+            filtered_for_okx.append(coin)
 
+    coin_names = [f"**{c['name']}** ({c['symbol'].upper()}) - {c['price_change_percentage_24h']:.2f}%" for c in filtered_for_okx]
+    
+    selected_coin_name = st.selectbox("اختر عملة من القائمة", coin_names, key='coin_select')
+    
+    # Extract symbol from selected_coin_name and update session state
+    if selected_coin_name:
+        selected_symbol_from_list = selected_coin_name.split('(')[1].split(')')[0]
+        if st.session_state.selected_symbol != selected_symbol_from_list:
+            st.session_state.selected_symbol = selected_symbol_from_list
+            st.session_state.symbol_changed = True
+    else:
+        st.session_state.symbol_changed = False
+    
     st.markdown("---")
 
 # Main Analysis Section
@@ -334,22 +348,22 @@ col_sym, col_tf, col_lim, col_perp = st.columns(4)
 with col_sym:
     st.session_state.selected_symbol = st.text_input("أدخل رمز العملة:", st.session_state.selected_symbol, key="manual_symbol")
 with col_tf:
-    tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
+    tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0, key='timeframe')
 with col_lim:
-    limit = st.slider("عدد الشموع", 50, 500, 200, 10)
+    limit = st.slider("عدد الشموع", 50, 500, 200, 10, key='limit')
 with col_perp:
     st.markdown("<br>", unsafe_allow_html=True)
-    use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
+    use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True, key='use_perp')
 
-# Fetch and Analyze button
-analyze_button = st.button("🚀 جلب وتحليل البيانات")
+analyze_button = st.button("🚀 جلب وتحليل البيانات", key='analyze_btn')
 
-if analyze_button or st.session_state.get('symbol_updated'):
+if analyze_button or st.session_state.get('symbol_changed'):
     with st.spinner('⏳ جارٍ جلب البيانات...'):
         try:
             instId = okx_inst_id(st.session_state.selected_symbol, use_perp=use_perp_okx)
             df = okx_get_candles(instId, bar=tf, limit=limit)
             st.session_state.df = df
+            st.session_state.inst_id = instId
             
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
@@ -377,20 +391,15 @@ if analyze_button or st.session_state.get('symbol_updated'):
                 else:
                     st.warning("⚠️ لا توجد بيانات OI متاحة لهذه الأداة.")
                 
-                # Automatically show calculator if data is fetched
                 trading_calculator(df, instId)
-
         except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
+        except RuntimeError as e:
+            st.error(f"❌ حدث خطأ: {e}")
         except Exception as e:
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
 
-# This part ensures that the calculator is displayed
-if 'df' in st.session_state and not st.session_state.df.empty and 'symbol_updated' not in st.session_state:
-    instId = okx_inst_id(st.session_state.selected_symbol, use_perp=use_perp_okx)
-    trading_calculator(st.session_state.df, instId)
-
-# Clear symbol_updated after use to prevent infinite loops
-if 'symbol_updated' in st.session_state:
-    del st.session_state.symbol_updated
+# Display calculator on initial load if data is present
+if not st.session_state.df.empty:
+    trading_calculator(st.session_state.df, st.session_state.inst_id)
 
