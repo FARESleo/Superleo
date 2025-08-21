@@ -57,21 +57,27 @@ def plot_line_chart(df, title):
 # ===================== OKX API =====================
 def okx_get_instruments(instType="SPOT"):
     url = "https://www.okx.com/api/v5/public/instruments"
-    params = {"instType": instType}
+    params = {"instType": instType, "uly": "USDT" if instType == "SWAP" else None}
     try:
-        r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r = requests.get(url, params={k: v for k, v in params.items() if v is not None}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         r.raise_for_status()
         j = r.json()
         if j.get("code") != "0":
-            raise RuntimeError(err_msg(j))
+            st.error(f"خطأ من OKX API: {err_msg(j)}")
+            return []
         instruments = [inst["instId"] for inst in j.get("data", []) if inst["quoteCcy"] == "USDT"]
+        if not instruments:
+            st.warning("⚠️ لا توجد أدوات متاحة لـ USDT في هذا النوع.")
         return sorted(instruments)
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ خطأ في الاتصال بـ OKX API: {str(e)}")
+        return []
     except Exception as e:
-        st.error(f"❌ خطأ في جلب قائمة الأدوات: {e}")
+        st.error(f"❌ خطأ غير متوقع في جلب قائمة الأدوات: {str(e)}")
         return []
 
 def okx_inst_id(symbol_text, use_perp=True):
-    return symbol_text  # القائمة المنسدلة تعيد معرف الأداة مباشرة
+    return symbol_text
 
 @st.cache_data(ttl=60)
 def okx_get_candles(instId, bar="15m", limit=200):
@@ -129,7 +135,10 @@ with st.sidebar:
     st.header("⚙️ خيارات التحليل")
     use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
     instruments = okx_get_instruments(instType="SWAP" if use_perp_okx else "SPOT")
-    symbol_in = st.selectbox("اختر العملة:", instruments, index=instruments.index("BTC-USDT-SWAP") if "BTC-USDT-SWAP" in instruments else 0)
+    if not instruments:
+        instruments = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]  # قائمة افتراضية للاختبار
+        st.warning("⚠️ فشل جلب قائمة الأدوات، يتم استخدام قائمة افتراضية.")
+    symbol_in = st.selectbox("اختر العملة:", instruments, index=0)
     tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
     limit = st.slider("عدد الشموع", 50, 500, 200, 10)
     analyze_button = st.button("🚀 جلب وتحليل البيانات")
