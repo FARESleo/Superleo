@@ -12,7 +12,7 @@ def err_msg(resp_json):
 def to_df_okx(candles):
     cols = ["ts","open","high","low","close","volume","volCcy","volQuote","confirm"]
     df = pd.DataFrame(candles, columns=cols[:len(candles[0])])
-    df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
+    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms")
     for c in ["open","high","low","close","volume"]:
         df[c] = df[c].astype(float)
     return df.sort_values("ts").reset_index(drop=True)
@@ -60,46 +60,45 @@ def okx_get_open_interest(instId):
     return j.get("data", [])[0] if j.get("data") else None
 
 # ===================== OI Analysis =====================
-def analyze_oi(oi, df, threshold=5_000_000):
+def analyze_oi(oi, df):
     if not oi or df.empty or len(df) < 5:
-        return ("❌ لا توجد بيانات كافية للتحليل.", "error")
+        return "❌ لا توجد بيانات كافية للتحليل."
 
     try:
         oi_val = float(oi["oiUsd"])
     except (ValueError, KeyError):
-        return ("⚠️ لم أتمكن من قراءة OI بشكل صحيح.", "warning")
+        return "⚠️ لم أتمكن من قراءة OI بشكل صحيح."
 
     last_close = df["close"].iloc[-1]
     prev_close = df["close"].iloc[-5]
     price_change = ((last_close - prev_close) / prev_close) * 100
 
     if price_change > 1:
-        if oi_val > threshold:
-            return ("📈 ارتفاع السعر مع OI كبير يؤكد قوة الاتجاه الصعودي.", "success")
+        if oi_val > 5_000_000:
+            return "📈 ارتفاع السعر مع OI كبير يؤكد قوة الاتجاه الصعودي."
         else:
-            return ("⚠️ ارتفاع السعر مع OI منخفض. قد يكون حركة مؤقتة.", "warning")
+            return "⚠️ ارتفاع السعر مع OI منخفض. قد يكون حركة مؤقتة."
     elif price_change < -1:
-        if oi_val > threshold:
-            return ("📉 انخفاض السعر مع OI كبير يؤكد قوة الاتجاه الهبوطي.", "error")
+        if oi_val > 5_000_000:
+            return "📉 انخفاض السعر مع OI كبير يؤكد قوة الاتجاه الهبوطي."
         else:
-            return ("⚠️ انخفاض السعر مع OI منخفض. قد يكون مجرد تصفية صفقات.", "warning")
+            return "⚠️ انخفاض السعر مع OI منخفض. قد يكون تصفية صفقات لا أكثر."
     elif abs(price_change) < 0.5:
-        if oi_val > threshold:
-             return ("⚖️ السعر شبه ثابت مع OI كبير. احتمال تجميع/تصريف.", "warning")
+        if oi_val > 5_000_000:
+             return "⚖️ السعر شبه ثابت مع OI كبير. يرجى مراقبة احتمال تجميع/تصريف."
         else:
-            return ("✅ حركة عادية بلا إشارات قوية.", "info")
+            return "✅ حركة عادية بلا إشارات قوية."
     else:
-        return ("✅ حركة عادية بلا إشارات قوية.", "info")
+        return "✅ حركة عادية بلا إشارات قوية."
 
 # ===================== UI =====================
 st.title("📊 أداة سوق العملات الرقمية — الشموع + Open Interest")
 
 with st.sidebar:
-    st.header("⚙️ خيارات التحليل")
+    st.header("خيارات التحليل")
     symbol_in = st.text_input("أدخل رمز العملة:", "xrp")
     tf = st.selectbox("الإطار الزمني", ["15m","5m","30m","1h","4h","1d"], index=0)
     limit = st.slider("عدد الشموع", 50, 500, 200, 10)
-    threshold = st.number_input("حد OI (USD)", min_value=1_000_000, value=5_000_000, step=500_000)
     use_perp_okx = st.checkbox("OKX Perpetual (SWAP)", value=True)
     analyze_button = st.button("جلب وتحليل 🔍")
 
@@ -115,32 +114,20 @@ if analyze_button:
                 # عرض الرسم البياني
                 st.plotly_chart(plot_candles(df, f"OKX {instId} — {tf}"), use_container_width=True)
 
-                # عرض النتائج في أقسام
+                # عرض ملخص البيانات
                 st.subheader("📊 ملخص البيانات")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3 = st.columns(3)
                 col1.metric("آخر سعر", f"{df['close'].iloc[-1]:,.4f}")
                 col2.metric("أعلى سعر", f"{df['high'].max():,.4f}")
                 col3.metric("أدنى سعر", f"{df['low'].min():,.4f}")
-                price_change = ((df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5]) * 100
-                col4.metric("تغير آخر 5 شموع", f"{price_change:.2f}%")
-
-                # قسم تحليل Open Interest
+                
+                # قسم OI
                 st.subheader("📦 Open Interest (OKX)")
                 oi = okx_get_open_interest(instId)
                 if oi:
                     col_oi_val, col_oi_msg = st.columns([1, 2])
                     col_oi_val.metric("قيمة OI بالدولار", f"{float(oi['oiUsd']):,.0f}")
-                    
-                    msg, level = analyze_oi(oi, df, threshold)
-                    if level == "success":
-                        col_oi_msg.success(msg)
-                    elif level == "warning":
-                        col_oi_msg.warning(msg)
-                    elif level == "error":
-                        col_oi_msg.error(msg)
-                    else:
-                        col_oi_msg.info(msg)
-
+                    col_oi_msg.info(analyze_oi(oi, df))
                     st.caption(f"آخر تحديث: {pd.to_datetime(oi['ts'], unit='ms')}")
                 else:
                     st.warning("لا توجد بيانات OI متاحة لهذه الأداة.")
