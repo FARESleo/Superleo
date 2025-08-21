@@ -112,7 +112,23 @@ def okx_get_open_interest(instId):
         return None
     return j.get("data", [])[0] if j.get("data") else None
 
-# ===================== OI Analysis =====================
+# دالة جديدة لجلب maxLever من OKX API (حقيقي)
+def okx_get_max_leverage(instId, instType="SWAP"):
+    url = "https://www.okx.com/api/v5/public/instruments"
+    params = {"instType": instType, "instId": instId}
+    r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+    r.raise_for_status()
+    j = r.json()
+    if j.get("code") != "0":
+        st.error(f"خطأ في جلب maxLever: {err_msg(j)}")
+        return None
+    data = j.get("data", [])[0] if j.get("data") else None
+    if data:
+        max_lever = float(data.get("lever", 1))  # maxLever من الـ API
+        return max_lever
+    return None
+
+# ===================== OI Analysis ===================== (محسن لدقة أكبر)
 def analyze_oi(df, oi, threshold=5_000_000):
     if df.empty or not oi:
         return {"msg": "❌ لا توجد بيانات كافية", "risk": "Unknown", "icon": "❌"}
@@ -122,23 +138,32 @@ def analyze_oi(df, oi, threshold=5_000_000):
     last_close = df["close"].iloc[-1]
     prev_close = df["close"].iloc[-5]
     chg = ((last_close - prev_close) / prev_close) * 100
-    if chg > 1 and oi_usd > threshold:
-        return {"msg": "صعود قوي + OI مرتفع → صاعد بقوة", "risk": "Bullish", "icon": "🚀"}
-    if chg < -1 and oi_usd > threshold:
-        return {"msg": "هبوط قوي + OI مرتفع → هابط بقوة", "risk": "Bearish", "icon": "🔻"}
+    avg_volume = df["volume"].mean()  # إضافة فحص لحجم التداول لدقة
+    if chg > 1 and oi_usd > threshold and avg_volume > df["volume"].mean() * 1.2:
+        return {"msg": "صعود قوي + OI مرتفع + حجم مرتفع → صاعد بقوة", "risk": "Bullish", "icon": "🚀"}
+    if chg < -1 and oi_usd > threshold and avg_volume > df["volume"].mean() * 1.2:
+        return {"msg": "هبوط قوي + OI مرتفع + حجم مرتفع → هابط بقوة", "risk": "Bearish", "icon": "🔻"}
     if abs(chg) <= 1 and oi_usd > threshold:
         return {"msg": "سعر شبه ثابت + OI يرتفع بسرعة → تحرك وشيك", "risk": "High Risk", "icon": "⚖️"}
     return {"msg": "حركة طبيعية وهادئة", "risk": "Neutral", "icon": "✅"}
 
-# ===================== Trading Calculator =====================
+# ===================== Trading Calculator ===================== (مع قيم حقيقية)
 def trading_calculator(df, instId):
+    if df.empty:
+        st.error("❌ لا توجد بيانات لعرض الحاسبة. يرجى جلب البيانات أولاً.")
+        return
+
+    max_lever = okx_get_max_leverage(instId) or 125.0  # افتراضي إذا فشل الجلب (مثل BTC-SWAP)
+    imr_default = 100 / max_lever  # IMR حقيقي من maxLever
+    mmr_default = imr_default / 2  # MMR تقريبي (نصف IMR، كما في بعض البورصات)
+
     st.subheader("📈 حاسبة التداول المتقدمة")
-    with st.expander("افتح الحاسبة", expanded=False):
+    with st.expander("افتح الحاسبة", expanded=True):
         col1, col2 = st.columns(2)
 
         with col1:
-            imr = st.number_input("الهامش المبدئي (IMR %)", min_value=0.1, max_value=100.0, value=2.0, step=0.1)
-            mmr = st.number_input("هامش الحفاظ (MMR %)", min_value=0.1, max_value=100.0, value=1.0, step=0.1)
+            imr = st.number_input("الهامش المبدئي (IMR %)", min_value=0.1, max_value=100.0, value=imr_default, step=0.1)
+            mmr = st.number_input("هامش الحفاظ (MMR %)", min_value=0.1, max_value=100.0, value=mmr_default, step=0.1)
             capital = st.number_input("المبلغ (USDT)", min_value=1.0, value=10.0, step=1.0)
 
         with col2:
@@ -150,10 +175,16 @@ def trading_calculator(df, instId):
         margin_diff = imr - mmr
         max_leverage = 100 / margin_diff if margin_diff > 0 else 1
         leverage_options = [5, 10, 20, 30, 50, 100]
-        leverage = st.selectbox("اختر الرافعة المالية", [f"{x}x ({'منخفضة' if x <= 10 else 'متوسطة' if x <= 50 else 'عالية جداً'})" for x in leverage_options if x <= max_leverage] + [f"{max_leverage:.2f}x (القصوى)"], index=0)
+        leverage_labels = [f"{x}x ({'منخفضة' if x <= 10 else 'متوسطة' if x <= 50 else 'عالية جداً'})" for x in leverage_options if x <= max_leverage]
+        leverage_labels.append(f"{max_leverage:.2f}x (القصوى)")
+        leverage = st.selectbox("اختر الرافعة المالية", leverage_labels, index=0)
         leverage = float(leverage.split("x")[0])
 
         # الحسابات
+        if margin_diff <= 0 or any(v is None for v in [imr, mmr, capital, current_price, target_price]):
+            st.error("⚠️ يرجى إدخال قيم صالحة لجميع الحقول.")
+            return
+
         price_change = ((target_price - current_price) / current_price) * 100
         actual_price_change = -price_change if direction == "📉 بيع (Short)" else price_change
         roi_percent = actual_price_change * leverage
@@ -216,6 +247,7 @@ if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
     st.session_state.symbol = ""
     st.session_state.use_perp = True
+    st.session_state.show_calculator = False
 
 # عند النقر على "جلب وتحليل البيانات"
 if analyze_button:
@@ -225,6 +257,7 @@ if analyze_button:
         try:
             instId = okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp)
             df = okx_get_candles(instId, bar=tf, limit=limit)
+            st.session_state.df = df
             
             if df.empty:
                 st.error("❌ لم يتم العثور على بيانات شموع لهذه العملة.")
@@ -256,9 +289,14 @@ if analyze_button:
 
                 # إضافة خيار الحاسبة
                 if st.button("📊 افتح حاسبة التداول"):
-                    trading_calculator(df, instId)
+                    st.session_state.show_calculator = True
+                    st.experimental_rerun()  # إعادة تشغيل لضمان التحديث
 
-        except requests.exceptions.HTTPError as e:
+except requests.exceptions.HTTPError as e:
             st.error(f"❌ خطأ في الاتصال بواجهة API: {e}. يرجى التحقق من الرمز.")
         except Exception as e:
             st.error(f"❌ حدث خطأ غير متوقع: {e}")
+
+# عرض الحاسبة إذا تم تفعيلها
+if st.session_state.show_calculator and not st.session_state.df.empty:
+    trading_calculator(st.session_state.df, okx_inst_id(st.session_state.symbol, use_perp=st.session_state.use_perp))
